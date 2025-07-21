@@ -1,24 +1,19 @@
-import assert from "assert";
 import {
-  AnyStateMachine,
+  type AnyStateMachine,
+  type SnapshotFrom,
+  type InputFrom,
+  type EventFrom,
   fromPromise,
   initialTransition,
   transition,
   setup,
-  ExecutableActionsFrom,
-  EventFrom,
-  ExecutableSpawnAction,
-  createActor,
-  toPromise,
-  InvokeConfig,
-  DoneActorEvent,
-  InputFrom,
   assign,
-  ErrorActorEvent,
 } from "xstate";
 
 
 import * as restate from "@restatedev/restate-sdk";
+import type { ExecuteActionRequest, MachineVirtualObject, ActionDispatcher, MachineObjectOptions } from "./types";
+import { dispatchAction, doExecuteAction } from "./xstate_integration";
 /* const machine = setup({
   actors: {
     sendWelcomeEmail: fromPromise(async () => {
@@ -268,161 +263,101 @@ export const machine = setup({
   }),
 });
 
-export function createDoneActorEvent(
-  invokeId: string,
-  output?: unknown
-): DoneActorEvent {
+
+// --------------------------------------------------------
+// utils 
+// --------------------------------------------------------
+
+function actionDispatcher<P extends string, M extends AnyStateMachine>(
+  name: P,
+  context: restate.ObjectSharedContext
+): ActionDispatcher<M> {
+  const self = { name } as restate.VirtualObjectDefinition<
+    string,
+    MachineVirtualObject<M>
+  >;
+
   return {
-    type: `xstate.done.actor.${invokeId}`,
-    output,
-    actorId: invokeId,
+    dispatchExecuteAction: (action: ExecuteActionRequest) => {
+      context.objectSendClient(self, context.key)._execute(action);
+    },
+    dispatchEvent: (event: EventFrom<M>, delay?: number) => {
+      context
+        .objectSendClient(self, context.key)
+        .send(event, restate.rpc.sendOpts({ delay }));
+    },
   };
 }
 
-export function createErrorActorEvent(
-  invokeId: string,
-  error: unknown
-): ErrorActorEvent {
-  return {
-    type: `xstate.error.actor.${invokeId}`,
-    error,
-    actorId: invokeId,
-  };
+export function createMachineObject<P extends string, M extends AnyStateMachine>(
+  name: P,
+  machine: M,
+  options?: MachineObjectOptions
+): restate.VirtualObjectDefinition<P, MachineVirtualObject<M>> {
+  return restate.object({
+    name,
+    handlers: {
+      /**
+       * Create a new instance of the machine
+       *
+       * @param context restate context
+       * @param input input for the machine
+       */
+      create: async (context: restate.ObjectContext, input: InputFrom<M>) => {
+        const [state, actions] = initialTransition(machine, input);
+
+        context.set("state", state);
+
+        const self = actionDispatcher(name, context);
+        for (const action of actions) {
+          dispatchAction(self, action);
+        }
+      },
+
+      /**
+       * Send an event to the machine
+       *
+       * @param context restate context
+       * @param event input event for the machine
+       */
+      send: async (context: restate.ObjectContext, event: EventFrom<M>) => {
+        const state: any = (await context.get("state")) ?? {};
+        const snapshot = machine.resolveState(state) as SnapshotFrom<M>;
+        const [nextState, actions] = transition(machine, snapshot, event);
+
+        context.set("state", nextState);
+
+        const self = actionDispatcher(name, context);
+        for (const action of actions) {
+          dispatchAction(self, action);
+        }
+      },
+
+      /**
+       * Execute an action that was emitted by the machine as part of
+       * a transition. This is a shared handler so that actions can be executed
+       * in parallel for a given machine instance.
+       * Once the action completes (either successfully or with an error),
+       * the result is sent back to the machine instance.
+       *
+       * @param context restate context
+       * @param action the action to execute
+       */
+      _execute: restate.handlers.object.shared(
+        { ingressPrivate: true, enableLazyState: true },
+        async (
+          context: restate.ObjectSharedContext,
+          action: ExecuteActionRequest
+        ) => {
+          const result = await doExecuteAction(machine, action);
+          const self = actionDispatcher(name, context);
+          self.dispatchEvent(result);
+        }
+      ),
+    },
+    options: options,
+  });
 }
 
-async function sleep(arg0: number) {
-  await new Promise((resolve) => setTimeout(resolve, arg0));
-}
 
-export type ExecuteActionRequest = {
-  params: ExecutableSpawnAction['params'];
-};
 
-async function execute(
-  context: restate.ObjectContext,
-  action: ExecutableActionsFrom<typeof machine>
-) {
-  console.log("Executing action", action);
-  switch (action.type) {
-    case "xstate.spawnChild": {
-      const spawnAction = action as ExecutableSpawnAction;
-      context.objectSendClient(workflow, context.key).execute({
-        params: spawnAction.params,
-      });
-      break;
-    }
-    case "xstate.raise": {
-      if (action.params.delay) {
-        context
-          .objectSendClient(workflow, context.key)
-          .send(
-            action.params.event,
-            restate.rpc.sendOpts({ delay: action.params.delay })
-          );
-      } else {
-        // TODO:
-      }
-      break;
-    }
-    default: {
-      break;
-    }
-  }
-}
-
-export function resolveReferencedActor(machine: AnyStateMachine, src: string) {
-  const match = src.match(/^xstate\.invoke\.(\d+)\.(.*)/)!;
-  if (!match) {
-    return machine.implementations.actors[src];
-  }
-  const [, indexStr, nodeId] = match;
-  const node = machine.getStateNodeById(nodeId);
-  const invokeConfig = node.config.invoke!;
-  return (
-    Array.isArray(invokeConfig)
-      ? invokeConfig[indexStr as any]
-      : (invokeConfig as InvokeConfig<
-          any,
-          any,
-          any,
-          any,
-          any,
-          any,
-          any, // TEmitted
-          any // TMeta
-        >)
-  ).src;
-}
-
-export const create = async (
-  restate: restate.ObjectContext,
-  input: InputFrom<typeof machine>
-) => {
-  const [state, actions] = initialTransition(machine, input);
-
-  restate.set("state", state);
-
-  for (const action of actions) {
-    await execute(restate, action);
-  }
-};
-
-export const send = async (
-  restate: restate.ObjectContext,
-  event: EventFrom<typeof machine>
-) => {
-  const state: any = (await restate.get("state")) ?? {};
-  const [nextState, actions] = transition(
-    machine,
-    machine.resolveState(state),
-    event
-  );
-
-  restate.set("state", nextState);
-
-  for (const action of actions) {
-    await execute(restate, action);
-  }
-};
-
-/**
- * Internal function to execute an action in the context of a shared restate object.
- */
-export const executeAction = async (
-  restate: restate.ObjectSharedContext,
-  action: ExecuteActionRequest
-) => {
-  const params = action.params;
-  const logic =
-    typeof params.src === "string"
-      ? resolveReferencedActor(machine, params.src)
-      : params.src;
-
-  assert("transition" in logic);
-  let event;
-  try {
-  const output = await toPromise(createActor(logic, params).start());
-   event = createDoneActorEvent(params.id, output);
-  } catch (err) {
-    event = createErrorActorEvent(params.id, err);
-  }
-  restate.objectSendClient(workflow, restate.key).send(event);
-  
-};
-
-export const workflow = restate.object({
-  name: "workflow",
-  handlers: {
-    create,
-    send,
-    execute: restate.handlers.object.shared(
-      { ingressPrivate: true, enableLazyState: true },
-      executeAction
-    ),
-  },
-  options: {
-    journalRetention: { days: 1 },
-  },
-});
-
-restate.endpoint().bind(workflow).listen();
