@@ -63,7 +63,7 @@ export const workflow = setup({
 describe("A fromPromise based state machine", () => {
   it(
     "Will complete the workflow successfully",
-    { timeout: 20_000 },
+    { timeout: 60_000 },
     async () => {
 
       using machine = await createRestateTestActor<

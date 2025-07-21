@@ -68,7 +68,7 @@ export const stopwatchMachine = setup({
 describe("A stopwatch machine", () => {
   it(
     "Will complete successfully",
-    { skip: true, timeout: 20_000 },
+    { skip: true, timeout: 60_000 },
     async () => {
 
       using actor = await createRestateTestActor<

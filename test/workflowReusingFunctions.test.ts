@@ -9,14 +9,11 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import * as restate from "@restatedev/restate-sdk";
-
 import { describe, it } from "vitest";
 import { createRestateTestActor } from "./runner";
 
 import { assign, createMachine, forwardTo, fromPromise, sendParent, setup, type SnapshotFrom } from "xstate";
 import { eventually } from "./eventually.js";
-import { createMachineObject } from "../src/core.js";
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -199,7 +196,7 @@ const parentWorkflow = createMachine({
 
 
 describe("Reusing functions workflow", () => {
-  it("Will complete successfully", { skip: true, timeout: 20_000 }, async () => {
+  it("Will complete successfully", { todo: true, timeout: 60_000 }, async () => {
 
     using actor = await createRestateTestActor<SnapshotFrom<typeof parentWorkflow>>({
       machine: parentWorkflow,

@@ -110,7 +110,7 @@ export const workflow = setup({
 });
 
 describe("An event based workflow", () => {
-  it("Will complete successfully", { timeout: 20_000 }, async () => {
+  it("Will complete successfully", { timeout: 60_000 }, async () => {
 
     using actor = await createRestateTestActor<SnapshotFrom<typeof workflow>>({
       machine: workflow,

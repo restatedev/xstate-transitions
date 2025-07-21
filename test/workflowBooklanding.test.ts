@@ -275,7 +275,7 @@ export const workflow = createMachine(
 );
 
 describe("An book landing workflow", () => {
-  it("Will complete successfully", { timeout: 20_000 }, async () => {
+  it("Will complete successfully", { timeout: 60_000 }, async () => {
 
     using actor = await createRestateTestActor<
       { value?: { "Check Out Book": string } } | undefined

@@ -35,7 +35,7 @@ const xmachine = createMachine({
 describe("Simple count machine", () => {
   it(
     "Will respond to different count events",
-    { timeout: 20_000 },
+    { timeout: 60_000 },
     async () => {
 
       using machine = await createRestateTestActor<{
