@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx --watch ./src/core.ts",
+    "dev": "tsx --watch ./src/example.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
