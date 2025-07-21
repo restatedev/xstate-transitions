@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx --watch ./src/example.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest --run",
+    "build": "tsc --outDir ./dist"
   },
   "keywords": [],
   "author": "",
@@ -16,8 +17,11 @@
     "xstate": "^5.20.1"
   },
   "devDependencies": {
+    "@restatedev/restate-sdk-clients": "1.7.3",
+    "@restatedev/restate-sdk-testcontainers": "1.7.3",
     "@types/node": "^24.0.15",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
   }
 }

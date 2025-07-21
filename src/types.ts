@@ -1,4 +1,4 @@
-import type { AnyStateMachine, EventFrom, ExecutableSpawnAction, InputFrom } from "xstate";
+import type { AnyStateMachine, EventFrom, ExecutableSpawnAction, InputFrom, Snapshot } from "xstate";
 import type { ObjectOptions } from "@restatedev/restate-sdk";
 
 
@@ -11,6 +11,7 @@ export type ExecuteActionRequest = {
 export type MachineVirtualObject<M extends AnyStateMachine> = {
   create: (context: any, input: InputFrom<M>) => Promise<void>;
   send: (context: any, event: EventFrom<M>) => Promise<void>;
+  snapshot: (context: any) => Promise<Snapshot<M>>;
   _execute: (context: any, action: ExecuteActionRequest) => Promise<void>;
 };
 

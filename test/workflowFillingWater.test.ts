@@ -1,0 +1,87 @@
+/*
+ * Copyright (c) 2023-2024 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+
+import { describe, it } from "vitest";
+import { createRestateTestActor } from "./runner";
+
+import { createMachine, assign, type SnapshotFrom } from "xstate";
+import { eventually } from "./eventually.js";
+
+// https://github.com/serverlessworkflow/specification/blob/main/examples/README.md#filling-a-glass-of-water
+export const workflow = createMachine({
+  id: "fillglassofwater",
+  types: {} as {
+    events: {
+      type: "WaterAddedEvent";
+    };
+    context: {
+      counts: {
+        current: number;
+        max: number;
+      };
+    };
+    input: {
+      current: number;
+      max: number;
+    };
+  },
+  initial: "CheckIfFull",
+  context: ({ input }) => ({
+    counts: input,
+  }),
+  states: {
+    CheckIfFull: {
+      always: [
+        {
+          target: "AddWater",
+          guard: ({ context }) => context.counts.current < context.counts.max,
+        },
+        {
+          target: "GlassFull",
+        },
+      ],
+    },
+    AddWater: {
+      after: {
+        500: {
+          actions: assign({
+            counts: ({ context }) => ({
+              ...context.counts,
+              current: context.counts.current + 1,
+            }),
+          }),
+          target: "CheckIfFull",
+        },
+      },
+    },
+    GlassFull: {
+      type: "final",
+    },
+  },
+});
+
+describe("Fill water workflow", () => {
+  it("Will complete successfully", { timeout: 30_000 }, async () => {
+
+    using actor = await createRestateTestActor<SnapshotFrom<typeof workflow>>({
+      machine: workflow,
+      input: {
+        current: 0,
+        max: 10,
+      },
+    });
+
+    await eventually(() => actor.snapshot()).toMatchObject({
+      status: "done",
+      value: "GlassFull",
+    });
+  });
+});

@@ -5,6 +5,7 @@ import {
   type EventFrom,
   initialTransition,
   transition,
+  Snapshot,
 } from "xstate";
 
 import * as restate from "@restatedev/restate-sdk";
@@ -101,7 +102,13 @@ export function createMachineObject<P extends string, M extends AnyStateMachine>
           self.dispatchEvent(result);
         }
       ),
-    },
+
+      snapshot: async (context: restate.ObjectContext): Promise<Snapshot<M>> => {
+        const state: any = (await context.get("state")) ?? {};
+        const snapshot = machine.resolveState(state) as SnapshotFrom<M>;
+        return snapshot;
+      },
+    } satisfies MachineVirtualObject<M>,
     options,
   });
 }

@@ -11,7 +11,6 @@ import {
 } from "xstate";
 
 import type { ExecuteActionRequest, ActionDispatcher } from "./types";
-import assert from "assert";
 
 function createDoneActorEvent(
   invokeId: string,
@@ -104,7 +103,7 @@ export const doExecuteAction = async <M extends AnyStateMachine>(
       ? resolveReferencedActor(machine, params.src)
       : params.src;
 
-  assert("transition" in logic);
+  //assert("transition" in logic);
   try {
     const output = await toPromise(createActor(logic, params).start());
     return createDoneActorEvent(params.id, output);

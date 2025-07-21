@@ -1,0 +1,81 @@
+/*
+ * Copyright (c) 2023-2024 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+
+import { describe, it } from "vitest";
+import { createRestateTestActor } from "./runner";
+
+import { fromPromise, setup } from "xstate";
+import { eventually } from "./eventually.js";
+
+// from: https://raw.githubusercontent.com/statelyai/xstate/refs/heads/main/examples/workflow-async-function/main.ts
+
+export const workflow = setup({
+  types: {
+    input: {} as {
+      customer: string;
+    },
+  },
+  actors: {
+    sendEmail: fromPromise(
+      async ({ input }: { input: { customer: string } }) => {
+        console.log("Sending email to", input.customer);
+
+        await new Promise<void>((resolve) =>
+          setTimeout(() => {
+            console.log("Email sent to", input.customer);
+            resolve();
+          }, 1),
+        );
+      },
+    ),
+  },
+}).createMachine({
+  id: "async-function-invocation",
+  initial: "Send email",
+  context: ({ input }) => ({
+    customer: input.customer,
+  }),
+  states: {
+    "Send email": {
+      invoke: {
+        src: "sendEmail",
+        input: ({ context }) => ({
+          customer: context.customer,
+        }),
+        onDone: "Email sent",
+      },
+    },
+    "Email sent": {
+      type: "final",
+    },
+  },
+});
+
+describe("A fromPromise based state machine", () => {
+  it(
+    "Will complete the workflow successfully",
+    { timeout: 20_000 },
+    async () => {
+
+      using machine = await createRestateTestActor<
+        { status?: string } | undefined
+      >({
+        machine: workflow,
+        input: { customer: "bob@mop.com" },
+      });
+
+      await eventually(() => machine.snapshot()).toMatchObject({
+        status: "done",
+      });
+    },
+  );
+});

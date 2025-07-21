@@ -1,7 +1,22 @@
-import { assign, createMachine, forwardTo, fromPromise, sendParent, setup } from "xstate";
-import * as restate from "@restatedev/restate-sdk";
-import { createMachineObject } from "./core";
+/*
+ * Copyright (c) 2023-2024 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
 
+import * as restate from "@restatedev/restate-sdk";
+
+import { describe, it } from "vitest";
+import { createRestateTestActor } from "./runner";
+
+import { assign, createMachine, forwardTo, fromPromise, sendParent, setup, type SnapshotFrom } from "xstate";
+import { eventually } from "./eventually.js";
+import { createMachineObject } from "../src/core.js";
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -183,7 +198,30 @@ const parentWorkflow = createMachine({
 });
 
 
-restate
-  .endpoint()
-  .bind(createMachineObject("default", parentWorkflow))
-  .listen();
+describe("Reusing functions workflow", () => {
+  it("Will complete successfully", { skip: true, timeout: 20_000 }, async () => {
+
+    using actor = await createRestateTestActor<SnapshotFrom<typeof parentWorkflow>>({
+      machine: parentWorkflow,
+    });
+
+    await actor.send({
+      type: "PaymentReceivedEvent",
+      accountId: "1234",
+      payment: {
+        amount: 100,
+      },
+      customer: {
+        name: "John Doe",
+      },
+      funds: {
+        available: true,
+      },
+    });
+
+    await eventually(() => actor.snapshot()).toMatchObject({
+      status: "done",
+      value: "End",
+    });
+  });
+});
