@@ -17,18 +17,11 @@ pnpm test
 
 ### Run the example
 
-```sh
-pnpm run dev
-```
-
-It should listen at port 9080
-
-```sh
-docker run --net host --add-host=host.docker.internal:host-gateway restatedev/restate:latest
-```
-
-Then [http://localhost:9070](http://localhost:9070) add a deployment at http://localhost:9080
-[see quickstart over here] (https://docs.restate.dev/get_started/quickstart?sdk=ts)
+- `pnpm run dev`
+- `docker run --net host --add-host=host.docker.internal:host-gateway restatedev/restate:latest`
+- Use the webui [http://localhost:9070](http://localhost:9070)
+- Add a deployment at http://localhost:9080 (checkout the [quickstart](https://docs.restate.dev/get_started/quickstart?sdk=ts) for a detailed walkthrough)
+-
 
 ### Current limitation
 

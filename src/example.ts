@@ -1,4 +1,4 @@
-import { assign, fromPromise, sendParent, setup } from "xstate";
+import { assign, fromPromise, setup } from "xstate";
 import * as restate from "@restatedev/restate-sdk";
 import { createMachineObject } from "./core";
 
@@ -155,22 +155,12 @@ export const workflow = setup({
     },
     End: {
       type: "final",
-      entry: sendParent(
-        () =>
-          ({
-            type: "ConfirmationCompletedEvent",
-            payment: { amount: 1337 },
-          }) satisfies ConfirmationCompletedEvent,
-      ),
     },
   },
 });
 
-restate
-  .endpoint()
-  .bind(
-    createMachineObject("default", workflow, {
-      journalRetention: { days: 1 },
-    }),
-  )
-  .listen();
+const machineObject = createMachineObject("default", workflow, {
+  journalRetention: { days: 1 },
+});
+
+restate.endpoint().bind(machineObject).listen();
