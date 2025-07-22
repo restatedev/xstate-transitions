@@ -1,11 +1,4 @@
-import {
-  assign,
-  createMachine,
-  forwardTo,
-  fromPromise,
-  sendParent,
-  setup,
-} from "xstate";
+import { assign, fromPromise, sendParent, setup } from "xstate";
 import * as restate from "@restatedev/restate-sdk";
 import { createMachineObject } from "./core";
 
