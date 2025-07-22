@@ -84,7 +84,6 @@ export const workflow = setup({
 
 describe("An onboarding workflow", () => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-
     using actor = await createRestateTestActor<{ value?: string } | undefined>({
       machine: workflow,
     });

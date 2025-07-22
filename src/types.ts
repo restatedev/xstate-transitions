@@ -1,11 +1,16 @@
-import type { AnyStateMachine, EventFrom, ExecutableSpawnAction, InputFrom, Snapshot } from "xstate";
+import type {
+  AnyStateMachine,
+  EventFrom,
+  ExecutableSpawnAction,
+  InputFrom,
+  Snapshot,
+} from "xstate";
 import type { ObjectOptions } from "@restatedev/restate-sdk";
-
 
 export type MachineObjectOptions = {} & ObjectOptions;
 
 export type ExecuteActionRequest = {
-  params: ExecutableSpawnAction['params'];
+  params: ExecutableSpawnAction["params"];
 };
 
 export type MachineVirtualObject<M extends AnyStateMachine> = {

@@ -52,12 +52,12 @@ export async function createRestateTestActor<SnapshotType>(
     });
     const client = rs.objectClient<MachineVirtualObject<AnyStateMachine>>(
       { name: "default" },
-      opts.key ?? "default"
+      opts.key ?? "default",
     );
     await client.create({ ...(opts.input ?? {}) });
     return {
       send: async (event: AnyEventObject) => {
-        return (await client.send(event));
+        return await client.send(event);
       },
 
       snapshot: async () => {

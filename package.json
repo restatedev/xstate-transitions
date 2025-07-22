@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx --watch ./src/example.ts",
     "test": "vitest --run",
-    "build": "tsc --outDir ./dist"
+    "format": "prettier --write .",
+    "build": "tsc --project . --outDir ./dist"
   },
   "keywords": [],
   "author": "",
@@ -19,7 +20,8 @@
   "devDependencies": {
     "@restatedev/restate-sdk-clients": "1.7.3",
     "@restatedev/restate-sdk-testcontainers": "1.7.3",
-    "@types/node": "^24.0.15",
+    "@types/node": "^24.1.0",
+    "prettier": "^3.6.2",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"

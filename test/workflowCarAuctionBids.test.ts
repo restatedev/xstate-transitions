@@ -76,7 +76,6 @@ export const workflow = createMachine(
 
 describe("A car auction bidding workflow", () => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-
     using actor = await createRestateTestActor<SnapshotFrom<typeof workflow>>({
       machine: workflow,
     });

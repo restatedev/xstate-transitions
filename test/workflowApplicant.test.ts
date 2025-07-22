@@ -9,7 +9,7 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import {  fromPromise } from "xstate";
+import { fromPromise } from "xstate";
 import { describe, it } from "vitest";
 import { createRestateTestActor } from "./runner";
 
@@ -100,7 +100,6 @@ describe("An applicant workflow", () => {
     "Will complete the workflow successfully",
     { timeout: 30_000 },
     async () => {
-
       using actor = await createRestateTestActor<
         { value?: string } | undefined
       >({

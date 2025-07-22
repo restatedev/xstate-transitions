@@ -70,7 +70,6 @@ export const workflow = createMachine({
 
 describe("Fill water workflow", () => {
   it("Will complete successfully", { timeout: 30_000 }, async () => {
-
     using actor = await createRestateTestActor<SnapshotFrom<typeof workflow>>({
       machine: workflow,
       input: {

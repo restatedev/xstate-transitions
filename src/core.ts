@@ -9,16 +9,21 @@ import {
 } from "xstate";
 
 import * as restate from "@restatedev/restate-sdk";
-import type { ExecuteActionRequest, MachineVirtualObject, ActionDispatcher, MachineObjectOptions } from "./types";
+import type {
+  ExecuteActionRequest,
+  MachineVirtualObject,
+  ActionDispatcher,
+  MachineObjectOptions,
+} from "./types";
 import { dispatchAction, doExecuteAction } from "./xstate_integration";
 
 // --------------------------------------------------------
-// utils 
+// utils
 // --------------------------------------------------------
 
 function actionDispatcher<P extends string, M extends AnyStateMachine>(
   name: P,
-  context: restate.ObjectSharedContext
+  context: restate.ObjectSharedContext,
 ): ActionDispatcher<M> {
   const self = { name } as restate.VirtualObjectDefinition<
     string,
@@ -37,10 +42,13 @@ function actionDispatcher<P extends string, M extends AnyStateMachine>(
   };
 }
 
-export function createMachineObject<P extends string, M extends AnyStateMachine>(
+export function createMachineObject<
+  P extends string,
+  M extends AnyStateMachine,
+>(
   name: P,
   machine: M,
-  options?: MachineObjectOptions
+  options?: MachineObjectOptions,
 ): restate.VirtualObjectDefinition<P, MachineVirtualObject<M>> {
   return restate.object({
     name,
@@ -95,15 +103,17 @@ export function createMachineObject<P extends string, M extends AnyStateMachine>
         { ingressPrivate: true, enableLazyState: true },
         async (
           context: restate.ObjectSharedContext,
-          action: ExecuteActionRequest
+          action: ExecuteActionRequest,
         ) => {
           const result = await doExecuteAction(machine, action);
           const self = actionDispatcher(name, context);
           self.dispatchEvent(result);
-        }
+        },
       ),
 
-      snapshot: async (context: restate.ObjectContext): Promise<Snapshot<M>> => {
+      snapshot: async (
+        context: restate.ObjectContext,
+      ): Promise<Snapshot<M>> => {
         const state: any = (await context.get("state")) ?? {};
         const snapshot = machine.resolveState(state) as SnapshotFrom<M>;
         return snapshot;
@@ -112,6 +122,3 @@ export function createMachineObject<P extends string, M extends AnyStateMachine>
     options,
   });
 }
-
-
-

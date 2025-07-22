@@ -9,7 +9,7 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { createMachine, assign  } from "xstate";
+import { createMachine, assign } from "xstate";
 import { describe, it, expect } from "vitest";
 import { createRestateTestActor } from "./runner";
 
@@ -37,7 +37,6 @@ describe("Simple count machine", () => {
     "Will respond to different count events",
     { timeout: 60_000 },
     async () => {
-
       using machine = await createRestateTestActor<{
         context: { count: number };
       }>({

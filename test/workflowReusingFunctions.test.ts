@@ -12,7 +12,15 @@
 import { describe, it } from "vitest";
 import { createRestateTestActor } from "./runner";
 
-import { assign, createMachine, forwardTo, fromPromise, sendParent, setup, type SnapshotFrom } from "xstate";
+import {
+  assign,
+  createMachine,
+  forwardTo,
+  fromPromise,
+  sendParent,
+  setup,
+  type SnapshotFrom,
+} from "xstate";
 import { eventually } from "./eventually.js";
 
 async function delay(ms: number): Promise<void> {
@@ -37,7 +45,13 @@ interface PaymentReceivedEvent {
   };
 }
 
-// https://github.com/serverlessworkflow/specification/tree/main/examples#event-based-service-invocation
+interface ConfirmationCompletedEvent {
+  type: "ConfirmationCompletedEvent";
+  payment: {
+    amount: number;
+  };
+}
+
 export const workflow = setup({
   types: {
     events: {} as PaymentReceivedEvent,
@@ -66,7 +80,7 @@ export const workflow = setup({
         };
       }) => {
         console.log("Running checkfunds");
-        await delay(1000);
+        await delay(10);
 
         console.log("checkfunds done");
 
@@ -78,15 +92,11 @@ export const workflow = setup({
     sendSuccessEmail: fromPromise(async ({ input }) => {
       console.log({ input });
       console.log("Running sendSuccessEmail");
-      await delay(1000);
-
       console.log("sendSuccessEmail done");
     }),
     sendInsufficientFundsEmail: fromPromise(async ({ input }) => {
       console.log({ input });
       console.log("Running sendInsufficientFundsEmail");
-      await delay(1000);
-
       console.log("sendInsufficientFundsEmail done");
     }),
   },
@@ -95,7 +105,6 @@ export const workflow = setup({
   },
 }).createMachine({
   id: "paymentconfirmation",
-
   initial: "Pending",
   context: {
     customer: null,
@@ -167,58 +176,68 @@ export const workflow = setup({
     },
     End: {
       type: "final",
-      entry: sendParent(({ context }) => ({
-        type: "ConfirmationCompletedEvent",
-        payment: context.payment,
-      })),
+      entry: sendParent(
+        () =>
+          ({
+            type: "ConfirmationCompletedEvent",
+            payment: { amount: 1337 },
+          }) satisfies ConfirmationCompletedEvent,
+      ),
     },
   },
 });
 
 const parentWorkflow = createMachine({
-  id: 'parent',
+  id: "parent",
   types: {} as {
-    events: PaymentReceivedEvent;
+    events: PaymentReceivedEvent | ConfirmationCompletedEvent;
   },
   invoke: {
-    id: 'paymentconfirmation',
+    id: "paymentconfirmation",
     src: workflow,
   },
   on: {
-    PaymentReceivedEvent: { actions: forwardTo('paymentconfirmation') },
-    '*': {
-      actions: ({ event }) => {
-        console.log('Received event', event);
-      }
-    }
-  }
+    PaymentReceivedEvent: { actions: forwardTo("paymentconfirmation") },
+    ConfirmationCompletedEvent: {
+      actions: assign({
+        payment: ({ event }) => event.payment,
+      }),
+    },
+  },
 });
 
-
 describe("Reusing functions workflow", () => {
-  it("Will complete successfully", { todo: true, timeout: 60_000 }, async () => {
+  it(
+    "Will complete successfully",
+    { todo: true, timeout: 60_000 },
+    async () => {
+      using actor = await createRestateTestActor<
+        SnapshotFrom<typeof parentWorkflow>
+      >({
+        machine: parentWorkflow,
+      });
 
-    using actor = await createRestateTestActor<SnapshotFrom<typeof parentWorkflow>>({
-      machine: parentWorkflow,
-    });
+      await actor.send({
+        type: "PaymentReceivedEvent",
+        accountId: "1234",
+        payment: {
+          amount: 100,
+        },
+        customer: {
+          name: "John Doe",
+        },
+        funds: {
+          available: true,
+        },
+      });
 
-    await actor.send({
-      type: "PaymentReceivedEvent",
-      accountId: "1234",
-      payment: {
-        amount: 100,
-      },
-      customer: {
-        name: "John Doe",
-      },
-      funds: {
-        available: true,
-      },
-    });
-
-    await eventually(() => actor.snapshot()).toMatchObject({
-      status: "done",
-      value: "End",
-    });
-  });
+      await eventually(() => actor.snapshot()).toMatchObject({
+        context: {
+          payment: {
+            amount: 1337,
+          },
+        },
+      });
+    },
+  );
 });

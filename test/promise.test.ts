@@ -65,7 +65,6 @@ describe("A fromPromise based state machine", () => {
     "Will complete the workflow successfully",
     { timeout: 60_000 },
     async () => {
-
       using machine = await createRestateTestActor<
         { status?: string } | undefined
       >({

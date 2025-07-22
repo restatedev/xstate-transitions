@@ -14,7 +14,7 @@ import type { ExecuteActionRequest, ActionDispatcher } from "./types";
 
 function createDoneActorEvent(
   invokeId: string,
-  output?: unknown
+  output?: unknown,
 ): DoneActorEvent {
   return {
     type: `xstate.done.actor.${invokeId}`,
@@ -25,7 +25,7 @@ function createDoneActorEvent(
 
 function createErrorActorEvent(
   invokeId: string,
-  error: unknown
+  error: unknown,
 ): ErrorActorEvent {
   return {
     type: `xstate.error.actor.${invokeId}`,
@@ -64,7 +64,7 @@ function resolveReferencedActor(machine: AnyStateMachine, src: string) {
 
 export function dispatchAction<M extends AnyStateMachine>(
   self: ActionDispatcher<M>,
-  action: ExecutableActionsFrom<M>
+  action: ExecutableActionsFrom<M>,
 ) {
   console.log("Executing action", action);
   switch (action.type) {
@@ -79,7 +79,7 @@ export function dispatchAction<M extends AnyStateMachine>(
       if (action.params.delay) {
         self.dispatchEvent(
           action.params.event as EventFrom<M>,
-          action.params.delay
+          action.params.delay,
         );
       } else {
         // TODO:
@@ -95,7 +95,7 @@ export function dispatchAction<M extends AnyStateMachine>(
 
 export const doExecuteAction = async <M extends AnyStateMachine>(
   machine: M,
-  action: ExecuteActionRequest
+  action: ExecuteActionRequest,
 ): Promise<DoneActorEvent | ErrorActorEvent> => {
   const params = action.params;
   const logic =

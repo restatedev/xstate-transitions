@@ -119,7 +119,6 @@ describe("A Temperate workflow", () => {
     "Will complete the workflow successfully",
     { timeout: 30_000 },
     async () => {
-
       using actor = await createRestateTestActor<
         { status?: string } | undefined
       >({

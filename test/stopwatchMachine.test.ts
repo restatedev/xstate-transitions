@@ -70,7 +70,6 @@ describe("A stopwatch machine", () => {
     "Will complete successfully",
     { skip: true, timeout: 60_000 },
     async () => {
-
       using actor = await createRestateTestActor<
         { context?: { elapsed?: number } } | undefined
       >({
