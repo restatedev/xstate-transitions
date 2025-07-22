@@ -21,7 +21,8 @@ pnpm test
 - `docker run --net host --add-host=host.docker.internal:host-gateway restatedev/restate:latest`
 - Use the webui [http://localhost:9070](http://localhost:9070)
 - Add a deployment at http://localhost:9080 (checkout the [quickstart](https://docs.restate.dev/get_started/quickstart?sdk=ts) for a detailed walkthrough)
--
+- `curl http://localhost:8080/default/bob/create --json '{}'`
+- `curl http://localhost:8080/default/bob/send --json '{"type":"PaymentReceivedEvent","accountId":"1234","payment":{"amount":100},"customer":{"name":"bob"},"funds":{"available":true}}'`
 
 ### Current limitation
 
