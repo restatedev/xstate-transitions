@@ -11,10 +11,12 @@ import {
 } from "xstate";
 
 import type { ExecuteActionRequest, ActionDispatcher } from "./types";
+import { ExecutableSendToAction } from "xstate/dist/declarations/src/actions/send";
+import { resolveReferencedActor } from "./resolveReferencedActor";
 
 function createDoneActorEvent(
   invokeId: string,
-  output?: unknown,
+  output?: unknown
 ): DoneActorEvent {
   return {
     type: `xstate.done.actor.${invokeId}`,
@@ -25,7 +27,7 @@ function createDoneActorEvent(
 
 function createErrorActorEvent(
   invokeId: string,
-  error: unknown,
+  error: unknown
 ): ErrorActorEvent {
   return {
     type: `xstate.error.actor.${invokeId}`,
@@ -34,52 +36,44 @@ function createErrorActorEvent(
   };
 }
 
-function resolveReferencedActor(machine: AnyStateMachine, src: string) {
-  const match = src.match(/^xstate\.invoke\.(\d+)\.(.*)/)!;
-  if (!match) {
-    return machine.implementations.actors[src];
-  }
-  const [, indexStr, nodeId] = match;
-  const node = machine.getStateNodeById(nodeId);
-  const invokeConfig = node.config.invoke!;
-  return (
-    Array.isArray(invokeConfig)
-      ? invokeConfig[indexStr as any]
-      : (invokeConfig as InvokeConfig<
-          any,
-          any,
-          any,
-          any,
-          any,
-          any,
-          any, // TEmitted
-          any // TMeta
-        >)
-  ).src;
-}
-
 // --------------------------------------------------------
 // interpret an action
 // --------------------------------------------------------
 
-export function dispatchAction<M extends AnyStateMachine>(
+export async function dispatchAction<M extends AnyStateMachine>(
   self: ActionDispatcher<M>,
-  action: ExecutableActionsFrom<M>,
+  action: ExecutableActionsFrom<M>
 ) {
   console.log("Executing action", action);
   switch (action.type) {
     case "xstate.spawnChild": {
       const spawnAction = action as ExecutableSpawnAction;
-      self.dispatchExecuteAction({
-        params: spawnAction.params,
-      });
+      const targetId = await self.resolveSpawnAMachine(spawnAction);
+      if (targetId) {
+        self.init(targetId, (spawnAction.params as any).input);
+      } else {
+        self.dispatchExecuteAction(self.id, spawnAction);
+      }
+      break;
+    }
+    case "xstate.sendTo": {
+      const sendToAction = action as ExecutableSendToAction;
+
+      const logic = await self.resolveSendTarget(sendToAction);
+      console.log(sendToAction, logic);
+      self.dispatchEvent(
+        logic.id,
+        action.params.event as EventFrom<M>,
+        action.params.delay
+      );
       break;
     }
     case "xstate.raise": {
       if (action.params.delay) {
         self.dispatchEvent(
+          self.id,
           action.params.event as EventFrom<M>,
-          action.params.delay,
+          action.params.delay
         );
       } else {
         // TODO:
@@ -95,19 +89,28 @@ export function dispatchAction<M extends AnyStateMachine>(
 
 export const doExecuteAction = async <M extends AnyStateMachine>(
   machine: M,
-  action: ExecuteActionRequest,
-): Promise<DoneActorEvent | ErrorActorEvent> => {
+  action: ExecuteActionRequest
+): Promise<DoneActorEvent | ErrorActorEvent | void> => {
   const params = action.params;
-  const logic =
-    typeof params.src === "string"
-      ? resolveReferencedActor(machine, params.src)
-      : params.src;
+  let targetLogic: AnyStateMachine;
+  if ("src" in params) {
+    targetLogic =
+      typeof params.src === "string"
+        ? resolveReferencedActor(machine, params.src)
+        : params.src;
+  } else {
+    targetLogic = machine;
+  }
 
   //assert("transition" in logic);
   try {
-    const output = await toPromise(createActor(logic, params).start());
-    return createDoneActorEvent(params.id, output);
+    const output = await toPromise(createActor(targetLogic, params).start());
+    if (action.type === "xstate.spawnChild") {
+      return createDoneActorEvent(action.params.id, output);
+    }
   } catch (err) {
-    return createErrorActorEvent(params.id, err);
+    if (action.type === "xstate.spawnChild") {
+      return createErrorActorEvent(action.params.id, err);
+    }
   }
 };

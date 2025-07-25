@@ -20,6 +20,7 @@ import { MachineVirtualObject } from "../src/types";
 
 export type RunMachineOptions = {
   machine: AnyStateMachine;
+  machines?: AnyStateMachine[];
   key?: string;
   input?: unknown;
 };
@@ -31,11 +32,13 @@ export type RunningMachine<SnapshotType> = {
 };
 
 export async function createRestateTestActor<SnapshotType>(
-  opts: RunMachineOptions,
+  opts: RunMachineOptions
 ): Promise<RunningMachine<SnapshotType>> {
   const env = await RestateTestEnvironment.start(
     (restateServer) => {
-      const obj = createMachineObject("default", opts.machine);
+      const obj = createMachineObject("default", opts.machine, {
+        machines: opts.machines || [opts.machine],
+      });
       restateServer.bind(obj);
     },
     () =>
@@ -43,7 +46,7 @@ export async function createRestateTestActor<SnapshotType>(
         RESTATE_DEFAULT_NUM_PARTITIONS: "2",
         RESTATE_ROCKSDB_TOTAL_MEMORY_SIZE: "64 MB",
         RESTATE_DISABLE_TELEMETRY: "true",
-      }),
+      })
   );
 
   try {
@@ -52,12 +55,15 @@ export async function createRestateTestActor<SnapshotType>(
     });
     const client = rs.objectClient<MachineVirtualObject<AnyStateMachine>>(
       { name: "default" },
-      opts.key ?? "default",
+      opts.key ?? "default"
     );
-    await client.create({ ...(opts.input ?? {}) });
+    await client.create({
+      input: { ...(opts.input ?? {}) },
+      machineId: opts.machine.id,
+    });
     return {
       send: async (event: AnyEventObject) => {
-        return await client.send(event);
+        return await client.send({ event, machineId: opts.machine.id });
       },
 
       snapshot: async () => {

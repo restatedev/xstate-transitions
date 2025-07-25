@@ -215,6 +215,7 @@ describe("Reusing functions workflow", () => {
         SnapshotFrom<typeof parentWorkflow>
       >({
         machine: parentWorkflow,
+        machines: [parentWorkflow, workflow],
       });
 
       await actor.send({
