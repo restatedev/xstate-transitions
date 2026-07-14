@@ -19,7 +19,6 @@ async function delay(ms: number, errorProbability: number = 0): Promise<void> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
       if (Math.random() < errorProbability) {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
         reject({ type: "ServiceNotAvailable" });
       } else {
         resolve();
@@ -92,9 +91,8 @@ export const workflow = createMachine(
             actions: assign({
               // TODO: Fix typing issue
               book: ({ context, event }) => ({
-                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                 ...context.book!,
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+
                 status: event.output.status,
               }),
             }),

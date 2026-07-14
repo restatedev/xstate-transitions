@@ -24,10 +24,29 @@ pnpm test
 - `curl http://localhost:8080/default/bob/create --json '{}'`
 - `curl http://localhost:8080/default/bob/send --json '{"type":"PaymentReceivedEvent","accountId":"1234","payment":{"amount":100},"customer":{"name":"bob"},"funds":{"available":true}}'`
 
+### Features
+
+Each machine is a Restate virtual object whose durable state _is_ the machine
+snapshot (persisted history-safely). On top of the pure transition core it
+supports:
+
+- **Promise actors** with an injected Restate `ctx` (`fromPromise` from
+  [`src/promise.ts`](src/promise.ts) → `ctx.run` / `ctx.date` / `ctx.rand`);
+  transient errors are retried by Restate, `TerminalError` routes to `onError`.
+- **Delayed transitions** (`after`) and delayed events, with **cancellation**
+  (`cancel(id)`), via guarded Restate delayed self-sends.
+- **`waitFor` / `subscribe`** on `done` / `hasTag:*` conditions, backed by
+  Restate awakeables, plus tag exposure on snapshots.
+- **`finalStateTTL`** disposal of completed instances.
+- **Cross-machine messaging**: `invoke` / `spawn` of a child machine runs it as
+  its own virtual object (keyed `${parent}::${childId}`), with `sendTo` /
+  `forwardTo` / `sendParent` routed as Restate sends between objects, and invoke
+  `onDone` / `onError` reported back to the parent.
+
 ### Current limitation
 
-There is a failing (ignored) test at the moment [workflowReusingFunction.test.ts](test/workflowReusingFunctions.test.ts).
-This test is based off [xstate's workflow-reusing-functions example](https://github.com/statelyai/xstate/blob/main/examples/workflow-reusing-functions/main.ts).
-This test has two parallel machines, where one machine forwards machines to another, which somewhat doesn't work well with the pure transition api.
-copying the same machine into [transition.test.ts](https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570) results in the same
-behavior. (a stuck execution)
+`fromCallback` push actors (e.g. a `setInterval` that `sendBack`s events) are not
+supported — they require a long-lived in-process actor, which the
+stateless-between-requests model deliberately avoids. Model such cases by sending
+events into the machine externally, or with a recurring delayed self-event. See
+the skipped [stopwatchMachine.test.ts](test/stopwatchMachine.test.ts).

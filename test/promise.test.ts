@@ -8,7 +8,6 @@
  * directory of this repository or package, or at
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 
 import { describe, it } from "vitest";
 import { createRestateTestActor } from "./runner";

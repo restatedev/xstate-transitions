@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 /*
  * Copyright (c) 2023-2024 - Restate Software, Inc., Restate GmbH
  *
@@ -10,7 +9,7 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it, vi } from "vitest";
+import { describe, it } from "vitest";
 import { createRestateTestActor } from "./runner";
 
 import { createMachine, assign, type SnapshotFrom, fromPromise } from "xstate";
@@ -20,7 +19,6 @@ async function delay(ms: number, errorProbability: number = 0): Promise<void> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
       if (Math.random() < errorProbability) {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
         reject({ type: "ServiceNotAvailable" });
       } else {
         resolve();

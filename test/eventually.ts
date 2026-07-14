@@ -6,3 +6,9 @@ export function eventually<T>(fn: () => T): ReturnType<typeof expect.poll<T>> {
     interval: 250,
   });
 }
+
+export function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}

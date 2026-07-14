@@ -15,18 +15,25 @@ import {
 } from "@restatedev/restate-sdk-testcontainers";
 import * as clients from "@restatedev/restate-sdk-clients";
 import { AnyStateMachine, type AnyEventObject } from "xstate";
-import { createMachineObject } from "../src/core";
-import { MachineVirtualObject } from "../src/types";
+import { createMachineObject } from "../src";
+import { MachineVirtualObject, type MachineObjectOptions } from "../src";
 
 export type RunMachineOptions = {
   machine: AnyStateMachine;
   key?: string;
   input?: unknown;
+  options?: MachineObjectOptions;
 };
 
 export type RunningMachine<SnapshotType> = {
+  create: (input?: unknown) => Promise<void>;
   send: (event: AnyEventObject) => Promise<void>;
   snapshot(): Promise<SnapshotType>;
+  waitFor(
+    condition: string,
+    event?: AnyEventObject,
+    timeout?: number,
+  ): Promise<SnapshotType>;
   [Symbol.dispose](): void;
 };
 
@@ -35,7 +42,7 @@ export async function createRestateTestActor<SnapshotType>(
 ): Promise<RunningMachine<SnapshotType>> {
   const env = await RestateTestEnvironment.start(
     (restateServer) => {
-      const obj = createMachineObject("default", opts.machine);
+      const obj = createMachineObject("default", opts.machine, opts.options);
       restateServer.bind(obj);
     },
     () =>
@@ -56,12 +63,27 @@ export async function createRestateTestActor<SnapshotType>(
     );
     await client.create({ ...(opts.input ?? {}) });
     return {
+      create: async (input?: unknown) => {
+        return await client.create({ ...((input ?? {}) as object) });
+      },
       send: async (event: AnyEventObject) => {
         return await client.send(event);
       },
 
       snapshot: async () => {
         return (await client.snapshot()) as SnapshotType;
+      },
+
+      waitFor: async (
+        condition: string,
+        event?: AnyEventObject,
+        timeout?: number,
+      ) => {
+        return (await client.waitFor({
+          condition,
+          event,
+          timeout,
+        })) as SnapshotType;
       },
 
       [Symbol.dispose]: () => {

@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /*
  * Copyright (c) 2023-2024 - Restate Software, Inc., Restate GmbH
  *
@@ -129,7 +127,6 @@ describe("An event based workflow", () => {
 
     await eventually(
       async () =>
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         (await actor.snapshot()).context.appointmentInfo.appointmentInfo
           ?.appointmentId,
     ).toStrictEqual("1234");

@@ -207,37 +207,33 @@ const parentWorkflow = createMachine({
 });
 
 describe("Reusing functions workflow", () => {
-  it(
-    "Will complete successfully",
-    { todo: true, timeout: 60_000 },
-    async () => {
-      using actor = await createRestateTestActor<
-        SnapshotFrom<typeof parentWorkflow>
-      >({
-        machine: parentWorkflow,
-      });
+  it("Will complete successfully", { timeout: 60_000 }, async () => {
+    using actor = await createRestateTestActor<
+      SnapshotFrom<typeof parentWorkflow>
+    >({
+      machine: parentWorkflow,
+    });
 
-      await actor.send({
-        type: "PaymentReceivedEvent",
-        accountId: "1234",
+    await actor.send({
+      type: "PaymentReceivedEvent",
+      accountId: "1234",
+      payment: {
+        amount: 100,
+      },
+      customer: {
+        name: "John Doe",
+      },
+      funds: {
+        available: true,
+      },
+    });
+
+    await eventually(() => actor.snapshot()).toMatchObject({
+      context: {
         payment: {
-          amount: 100,
+          amount: 1337,
         },
-        customer: {
-          name: "John Doe",
-        },
-        funds: {
-          available: true,
-        },
-      });
-
-      await eventually(() => actor.snapshot()).toMatchObject({
-        context: {
-          payment: {
-            amount: 1337,
-          },
-        },
-      });
-    },
-  );
+      },
+    });
+  });
 });
