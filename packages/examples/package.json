@@ -6,7 +6,7 @@
   "description": "Runnable Restate examples for @restatedev/xstate-transitions",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx watch ./src/example.ts",
+    "dev": "tsx watch ./src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },
