@@ -1,14 +1,18 @@
-import { describe, it, expect } from "vitest";
-import { createMachine, initialTransition, setup } from "xstate";
+import { describe, expect, it } from "vitest";
 import {
-  resolveReferencedActor,
-  isRestatePromiseActor,
-  normalizeError,
+  createMachine,
+  initialTransition,
+  setup,
+  fromPromise as xstateFromPromise,
+} from "xstate";
+import { fromPromise as restateFromPromise } from "../../src/restate/promise";
+import {
   createDoneActorEvent,
   createErrorActorEvent,
+  isRestatePromiseActor,
+  normalizeError,
+  resolveReferencedActor,
 } from "../../src/xstate/actors";
-import { fromPromise as restateFromPromise } from "../../src/restate/promise";
-import { fromPromise as xstateFromPromise } from "xstate";
 
 describe("resolveReferencedActor", () => {
   it("resolves a named actor via implementations", () => {

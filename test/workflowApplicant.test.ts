@@ -9,12 +9,10 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { fromPromise } from "xstate";
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
-import { setup } from "xstate";
+import { fromPromise, setup } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 interface Applicant {
   fname: string;

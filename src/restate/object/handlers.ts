@@ -26,10 +26,10 @@ import type {
   SubscribeRequest,
   WaitForRequest,
 } from "../types";
+import { getRequiredState, validateNotDisposed } from "./guards";
 import type { MachineObjectRuntime } from "./runtime";
 import { resolveMachine } from "./runtime";
 import { applyEvent, consumeActorExecution } from "./transitions";
-import { getRequiredState, validateNotDisposed } from "./guards";
 import {
   parsePublicEvent,
   validateCondition,

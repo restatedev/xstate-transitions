@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { ObjectContext } from "@restatedev/restate-sdk";
+import { describe, expect, it, vi } from "vitest";
 import {
   executeEffects,
   maybeScheduleCleanup,

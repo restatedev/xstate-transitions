@@ -1,5 +1,5 @@
-import { fromPromise as xstateFromPromise } from "xstate";
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
+import { fromPromise as xstateFromPromise } from "xstate";
 import { RESTATE_PROMISE_ACTOR } from "../xstate/actors";
 
 /**

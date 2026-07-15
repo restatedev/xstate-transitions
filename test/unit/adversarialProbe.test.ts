@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  type AnyMachineSnapshot,
   assign,
   createMachine,
   forwardTo,
@@ -9,17 +10,16 @@ import {
   sendTo,
   setup,
   transition,
-  type AnyMachineSnapshot,
 } from "xstate";
+import { runActor } from "../../src/restate/run-actor";
+import { createNormalizedErrorActorEvent } from "../../src/xstate/actors";
+import { buildRegistry } from "../../src/xstate/registry";
 import {
   runInitial,
   runTransition,
   stubChildRef,
 } from "../../src/xstate/scope";
-import { buildRegistry } from "../../src/xstate/registry";
 import { fromStored, toStored } from "../../src/xstate/snapshot";
-import { runActor } from "../../src/restate/run-actor";
-import { createNormalizedErrorActorEvent } from "../../src/xstate/actors";
 
 const jsonRoundTrip = <T>(value: T): T =>
   JSON.parse(JSON.stringify(value)) as T;

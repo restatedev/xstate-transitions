@@ -13,10 +13,10 @@
  * that forwards machine options (see the `options` field used below).
  */
 
+import { expect, it, vi } from "vitest";
 import { createMachine } from "xstate";
-import { it, expect, vi } from "vitest";
-import { describeE2E } from "./harness";
 import { wait } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 const lifeCycleTrackerMachine = createMachine({
   id: "task",

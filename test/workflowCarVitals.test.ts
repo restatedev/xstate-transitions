@@ -10,10 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
-import { createMachine, assign, type SnapshotFrom, fromPromise } from "xstate";
+import { assign, createMachine, fromPromise, type SnapshotFrom } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 async function delay(ms: number, errorProbability: number = 0): Promise<void> {
   return new Promise((resolve, reject) => {

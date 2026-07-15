@@ -9,17 +9,15 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
+import * as clients from "@restatedev/restate-sdk-clients";
 import {
   RestateContainer,
   RestateTestEnvironment,
 } from "@restatedev/restate-sdk-testcontainers";
-import * as clients from "@restatedev/restate-sdk-clients";
 import type { AnyStateMachine } from "xstate";
 import { type AnyEventObject } from "xstate";
-import { createMachineObject } from "../src";
-import type { MachineVirtualObject } from "../src";
-import { type MachineObjectOptions } from "../src";
-import type { Condition } from "../src";
+import type { Condition, MachineVirtualObject } from "../src";
+import { createMachineObject, type MachineObjectOptions } from "../src";
 
 export type RunMachineOptions = {
   machine: AnyStateMachine;

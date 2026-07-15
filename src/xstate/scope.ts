@@ -1,5 +1,5 @@
+import type { AnyMachineSnapshot, AnyStateMachine } from "xstate";
 import { createActor, initialTransition, transition } from "xstate";
-import type { AnyStateMachine, AnyMachineSnapshot } from "xstate";
 import type { Action } from "./types";
 
 // ---------------------------------------------------------------------------

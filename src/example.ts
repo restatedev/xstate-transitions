@@ -1,5 +1,5 @@
-import { assign, fromPromise, setup } from "xstate";
 import * as restate from "@restatedev/restate-sdk";
+import { assign, fromPromise, setup } from "xstate";
 import { createMachineObject } from "./index";
 
 async function delay(ms: number): Promise<void> {

@@ -5,10 +5,10 @@
  * replay-stability assertion on the transition timestamp.
  */
 
-import { it, expect } from "vitest";
-import { describeE2E } from "./harness";
-import { fromPromise } from "../src";
+import { expect, it } from "vitest";
 import { assign, setup } from "xstate";
+import { fromPromise } from "../src";
+import { describeE2E } from "./harness";
 
 const dateMachine = setup({
   actors: {

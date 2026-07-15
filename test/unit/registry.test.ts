@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createMachine, fromPromise, setup } from "xstate";
 import { buildRegistry, isMachine } from "../../src/xstate/registry";
 

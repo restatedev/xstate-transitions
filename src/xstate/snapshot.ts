@@ -1,10 +1,10 @@
 import type {
-  AnyStateMachine,
   AnyMachineSnapshot,
+  AnyStateMachine,
   SnapshotFrom,
   SnapshotStatus,
 } from "xstate";
-import type { StoredState, ReturnedSnapshot } from "./types";
+import type { ReturnedSnapshot, StoredState } from "./types";
 
 // A raw xstate snapshot exposes more than we persist, and its `historyValue`
 // holds live StateNode instances. These local views describe just the fields we

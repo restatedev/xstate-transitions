@@ -10,10 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
 import { fromPromise, setup } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 // from: https://raw.githubusercontent.com/statelyai/xstate/refs/heads/main/examples/workflow-async-function/main.ts
 

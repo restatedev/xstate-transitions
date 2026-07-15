@@ -1,5 +1,5 @@
-import { createMachine, setup } from "xstate";
 import { describe, expect, it } from "vitest";
+import { createMachine, setup } from "xstate";
 import {
   createMachineObjectRuntime,
   resolveMachine,

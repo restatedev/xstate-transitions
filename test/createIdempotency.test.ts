@@ -8,9 +8,9 @@
  * deliberate decision, not an accident.
  */
 
-import { it, expect } from "vitest";
-import { describeE2E } from "./harness";
+import { expect, it } from "vitest";
 import { assign, createMachine } from "xstate";
+import { describeE2E } from "./harness";
 
 const counter = createMachine({
   types: {} as { context: { count: number } },

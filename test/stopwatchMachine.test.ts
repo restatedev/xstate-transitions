@@ -10,10 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
-import { assign, setup, fromCallback } from "xstate";
+import { assign, fromCallback, setup } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 export const stopwatchMachine = setup({
   actors: {

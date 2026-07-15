@@ -10,10 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
-import { fromPromise, setup, type SnapshotFrom } from "xstate";
+import { fromPromise, type SnapshotFrom, setup } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 interface Order {
   id: string;

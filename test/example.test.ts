@@ -9,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { createMachine, assign } from "xstate";
-import { it, expect } from "vitest";
+import { expect, it } from "vitest";
+import { assign, createMachine } from "xstate";
 import { describeE2E } from "./harness";
 
 const xmachine = createMachine({

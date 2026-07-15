@@ -10,18 +10,17 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
 import {
   assign,
   createMachine,
   forwardTo,
   fromPromise,
+  type SnapshotFrom,
   sendParent,
   setup,
-  type SnapshotFrom,
 } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {

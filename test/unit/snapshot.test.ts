@@ -1,10 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { assign, createMachine, initialTransition, transition } from "xstate";
+import { describe, expect, it } from "vitest";
 import type { AnyMachineSnapshot } from "xstate";
+import { assign, createMachine, initialTransition, transition } from "xstate";
 import {
-  toStored,
   fromStored,
   toReturnedSnapshot,
+  toStored,
 } from "../../src/xstate/snapshot";
 
 const jsonRoundTrip = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;

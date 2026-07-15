@@ -11,11 +11,11 @@
  * ctx (ctx.run) inside the child object.
  */
 
-import { it, expect, vi } from "vitest";
-import { describeE2E } from "./harness";
+import { expect, it, vi } from "vitest";
 import { assign, cancel, sendTo, setup } from "xstate";
 import { fromPromise } from "../src";
 import { wait } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 type MachineEvents = { type: "START_DELAYED" } | { type: "CANCEL" };
 type TaskEvents = { type: "START" };

@@ -1,5 +1,5 @@
-import { assign, createMachine, sendParent, sendTo, setup } from "xstate";
 import { expect, it } from "vitest";
+import { assign, createMachine, sendParent, sendTo, setup } from "xstate";
 import { eventually } from "./eventually";
 import { describeE2E } from "./harness";
 

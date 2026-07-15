@@ -1,17 +1,17 @@
 import type {
+  ObjectContext,
+  ObjectOptions,
+  ObjectSharedContext,
+  VirtualObjectDefinition,
+} from "@restatedev/restate-sdk";
+import type {
   AnyEventObject,
   AnyStateMachine,
   EventFrom,
   InputFrom,
 } from "xstate";
-import type {
-  ObjectContext,
-  ObjectSharedContext,
-  VirtualObjectDefinition,
-  ObjectOptions,
-} from "@restatedev/restate-sdk";
-import type { Condition, ReturnedSnapshot, SpawnParams } from "../xstate/types";
 import type { NormalizedError } from "../xstate/actors";
+import type { Condition, ReturnedSnapshot, SpawnParams } from "../xstate/types";
 
 /** One validation issue in the library-neutral Standard Schema format. */
 export interface StandardSchemaIssue {

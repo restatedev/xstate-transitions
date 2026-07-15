@@ -11,15 +11,15 @@
  * historyValue as node ids (toStored/fromStored) — proven by the last test.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  type AnyMachineSnapshot,
   assign,
   createMachine,
   initialTransition,
   transition,
-  type AnyMachineSnapshot,
 } from "xstate";
-import { toStored, fromStored } from "../../src/xstate/snapshot";
+import { fromStored, toStored } from "../../src/xstate/snapshot";
 
 // Emulate what Restate does to the snapshot between handler invocations.
 function roundTrip<T>(snapshot: T): T {

@@ -10,10 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
-import { setup, assign, fromPromise } from "xstate";
+import { assign, fromPromise, setup } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 const prompt = (_question: string) => Promise.resolve("bob");
 

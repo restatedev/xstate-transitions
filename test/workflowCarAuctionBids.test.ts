@@ -10,10 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
-import { createMachine, assign, type SnapshotFrom } from "xstate";
+import { assign, createMachine, type SnapshotFrom } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 interface Bid {
   carid: string;

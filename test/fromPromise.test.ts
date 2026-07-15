@@ -17,12 +17,12 @@
  * target shape and only type-checks against the future module.
  */
 
-import { expect, it, vi } from "vitest";
-import { describeE2E } from "./harness";
-import { fromPromise } from "../src";
-import { setup } from "xstate";
-import { eventually } from "./eventually.js";
 import { TerminalError } from "@restatedev/restate-sdk";
+import { expect, it, vi } from "vitest";
+import { setup } from "xstate";
+import { fromPromise } from "../src";
+import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
   setup({

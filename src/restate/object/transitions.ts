@@ -23,8 +23,8 @@ import {
   setState,
 } from "../state";
 import type { HandlerContext, InitRequest } from "../types";
-import { classifyKnownActors } from "./actor-state";
 import type { KnownActors } from "./actor-state";
+import { classifyKnownActors } from "./actor-state";
 import type { MachineObjectRuntime } from "./runtime";
 import { resolveMachine } from "./runtime";
 

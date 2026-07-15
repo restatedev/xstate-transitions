@@ -7,10 +7,10 @@
  * dropped.
  */
 
-import { it, expect } from "vitest";
-import { describeE2E } from "./harness";
-import { createMachine, raise, cancel } from "xstate";
+import { expect, it } from "vitest";
+import { cancel, createMachine, raise } from "xstate";
 import { eventually, wait } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 const machine = createMachine({
   id: "cancellable",

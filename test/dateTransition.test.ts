@@ -8,10 +8,10 @@
  * alwaysReplay run is the one that would catch a regression of the ctx.run wrap.
  */
 
-import { it, expect } from "vitest";
+import { expect, it } from "vitest";
 import { assign, createMachine } from "xstate";
-import { describeE2E } from "./harness";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 const machine = createMachine({
   types: {} as { context: { at: number } },

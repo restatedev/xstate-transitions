@@ -1,13 +1,13 @@
-import { createActor, toPromise } from "xstate";
-import type { AnyActorLogic, AnyStateMachine } from "xstate";
-import * as restate from "@restatedev/restate-sdk";
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
+import * as restate from "@restatedev/restate-sdk";
+import type { AnyActorLogic, AnyStateMachine } from "xstate";
+import { createActor, toPromise } from "xstate";
+import type { NormalizedError } from "../xstate/actors";
 import {
-  resolveReferencedActor,
   isRestatePromiseActor,
   normalizeError,
+  resolveReferencedActor,
 } from "../xstate/actors";
-import type { NormalizedError } from "../xstate/actors";
 import type { SpawnParams } from "../xstate/types";
 
 /** Result of running actor logic, before translating it to XState's protocol. */

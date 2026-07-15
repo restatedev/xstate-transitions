@@ -6,17 +6,17 @@
  * pure function whose decisions we can assert directly.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   assign,
+  cancel,
   createMachine,
   enqueueActions,
+  forwardTo,
   fromPromise,
   raise,
   sendParent,
-  forwardTo,
   sendTo,
-  cancel,
   setup,
 } from "xstate";
 import { initialStep, resumeStep } from "../../src/xstate/interpret";

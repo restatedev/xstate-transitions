@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import * as restate from "@restatedev/restate-sdk";
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
-import { fromPromise as xstateFromPromise, setup } from "xstate";
+import * as restate from "@restatedev/restate-sdk";
+import { describe, expect, it, vi } from "vitest";
+import { setup, fromPromise as xstateFromPromise } from "xstate";
 import { fromPromise } from "../../src/restate/promise";
 import { runActor } from "../../src/restate/run-actor";
 import { initialStep } from "../../src/xstate/interpret";

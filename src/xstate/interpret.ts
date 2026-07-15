@@ -1,20 +1,20 @@
 import type {
-  AnyStateMachine,
-  AnyMachineSnapshot,
   AnyEventObject,
+  AnyMachineSnapshot,
+  AnyStateMachine,
 } from "xstate";
+import { isMachine } from "./registry";
+import { PARENT_ID, runInitial, runTransition, stubChildRef } from "./scope";
+import { fromStored, toReturnedSnapshot, toStored } from "./snapshot";
 import type {
   Action,
-  Target,
-  SpawnParams,
   Effect,
-  Step,
   InitInput,
   ResumeInput,
+  SpawnParams,
+  Step,
+  Target,
 } from "./types";
-import { toStored, toReturnedSnapshot, fromStored } from "./snapshot";
-import { runInitial, runTransition, stubChildRef, PARENT_ID } from "./scope";
-import { isMachine } from "./registry";
 
 // ---------------------------------------------------------------------------
 // The pure heart of the integration. `initialStep` / `resumeStep` compute the

@@ -10,9 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
 import { createMachine, raise } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 const machine = createMachine({
   id: "immediate-raise",

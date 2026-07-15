@@ -5,15 +5,15 @@
  * replay modes.
  */
 
-import { createMachine } from "xstate";
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import * as clients from "@restatedev/restate-sdk-clients";
 import {
   RestateContainer,
   RestateTestEnvironment,
 } from "@restatedev/restate-sdk-testcontainers";
-import * as clients from "@restatedev/restate-sdk-clients";
-import { createMachineObject } from "../src";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createMachine } from "xstate";
 import type { MachineVirtualObject } from "../src";
+import { createMachineObject } from "../src";
 
 const simpleMachine = createMachine({
   id: "simplev1",

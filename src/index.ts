@@ -1,13 +1,13 @@
 // Public API
 export { createMachineObject } from "./restate/object";
-export { fromPromise } from "./restate/promise";
 export type { RestatePromiseCreator } from "./restate/promise";
+export { fromPromise } from "./restate/promise";
 export type {
-  MachineObjectOptions,
   MachineContract,
+  MachineObjectOptions,
   MachineVirtualObject,
   StandardSchema,
-  WaitForRequest,
   SubscribeRequest,
+  WaitForRequest,
 } from "./restate/types";
-export type { StoredState, ReturnedSnapshot, Condition } from "./xstate/types";
+export type { Condition, ReturnedSnapshot, StoredState } from "./xstate/types";

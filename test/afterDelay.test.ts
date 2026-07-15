@@ -7,10 +7,10 @@
  * must advance after. This locks the delayed-self-send pattern.
  */
 
-import { it, expect } from "vitest";
-import { describeE2E } from "./harness";
+import { expect, it } from "vitest";
 import { createMachine } from "xstate";
 import { eventually, wait } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 const DELAY = 2000;
 

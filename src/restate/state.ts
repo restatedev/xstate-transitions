@@ -3,7 +3,7 @@ import type {
   ObjectSharedContext,
 } from "@restatedev/restate-sdk";
 import type { StoredState } from "../xstate/types";
-import type { ScheduledDelivery, ChildRecord, Subscription } from "./types";
+import type { ChildRecord, ScheduledDelivery, Subscription } from "./types";
 
 // ---------------------------------------------------------------------------
 // All durable KV access for a machine instance goes through this module, so the

@@ -1,8 +1,8 @@
-import { assign, setup } from "xstate";
 import { expect, it, vi } from "vitest";
+import { assign, setup } from "xstate";
 import { fromPromise } from "../src";
-import { describeE2E } from "./harness";
 import { wait } from "./eventually";
+import { describeE2E } from "./harness";
 
 interface PendingRun {
   generation: number;

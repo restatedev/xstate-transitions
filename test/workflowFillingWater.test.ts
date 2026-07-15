@@ -10,10 +10,9 @@
  */
 
 import { it } from "vitest";
-import { describeE2E } from "./harness";
-
-import { createMachine, assign, type SnapshotFrom } from "xstate";
+import { assign, createMachine, type SnapshotFrom } from "xstate";
 import { eventually } from "./eventually.js";
+import { describeE2E } from "./harness";
 
 // https://github.com/serverlessworkflow/specification/blob/main/examples/README.md#filling-a-glass-of-water
 export const workflow = createMachine({

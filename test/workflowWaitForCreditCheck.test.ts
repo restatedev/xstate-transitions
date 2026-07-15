@@ -16,8 +16,8 @@
  */
 
 import { expect, it } from "vitest";
+import { assign, fromPromise, setup } from "xstate";
 import { describeE2E } from "./harness";
-import { fromPromise, setup, assign } from "xstate";
 
 interface Customer {
   id: string;
