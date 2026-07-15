@@ -147,7 +147,12 @@ function eventSchema<E>(
       );
     }
 
-    const payloadSchema = events[type];
+    // Only own keys count: `type` is attacker-controlled, so an inherited
+    // `Object.prototype` name (`toString`, `constructor`, `__proto__`, …) must
+    // resolve to "unknown event", never to a prototype member.
+    const payloadSchema = Object.hasOwn(events, type)
+      ? events[type]
+      : undefined;
     if (payloadSchema === undefined) {
       return issue(
         `Unknown event type "${type}". Expected one of: ${allowed.join(", ")}.`,
@@ -206,31 +211,44 @@ function eventBranchJsonSchema(
   schema: StandardSchemaV1 | undefined,
   options: JsonSchemaOptions,
 ): Record<string, unknown> {
-  const payload =
-    schema === undefined ? undefined : payloadJsonSchema(schema, options);
-  if (payload !== undefined && payload.type === "object") {
-    const {
-      $schema: _schema,
-      properties,
-      required,
-      ...rest
-    } = payload as {
-      $schema?: unknown;
-      properties?: Record<string, unknown>;
-      required?: readonly string[];
-      [key: string]: unknown;
-    };
-    return {
-      ...rest,
-      type: "object",
-      properties: { type: { const: type }, ...(properties ?? {}) },
-      required: Array.from(new Set(["type", ...(required ?? [])])),
-    };
-  }
-  return {
+  const discriminant = {
     type: "object",
     properties: { type: { const: type } },
     required: ["type"],
+  };
+  const payload =
+    schema === undefined ? undefined : payloadJsonSchema(schema, options);
+
+  // Only inline a self-contained object payload. A payload that carries `$defs`
+  // (recursive or reused schemas) uses document-root-relative `$ref`s that would
+  // dangle once nested here, and a non-object payload (union / intersection)
+  // cannot merge with the `type` discriminant. In both cases advertise just the
+  // discriminant so the discovery schema stays valid rather than misleading.
+  if (
+    payload === undefined ||
+    payload.type !== "object" ||
+    "$defs" in payload ||
+    "$ref" in payload
+  ) {
+    return discriminant;
+  }
+
+  const {
+    $schema: _schema,
+    properties,
+    required,
+    ...rest
+  } = payload as {
+    $schema?: unknown;
+    properties?: Record<string, unknown>;
+    required?: readonly string[];
+    [key: string]: unknown;
+  };
+  return {
+    ...rest,
+    type: "object",
+    properties: { type: { const: type }, ...(properties ?? {}) },
+    required: Array.from(new Set(["type", ...(required ?? [])])),
   };
 }
 

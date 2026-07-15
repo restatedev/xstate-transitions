@@ -196,6 +196,61 @@ describe("deriveEventSchema", () => {
     expect(branchFor("CLOSE")?.required).toEqual(["type"]);
   });
 
+  it("rejects (does not throw on) a type naming an inherited prototype member", () => {
+    const schema = deriveEventSchema(machine())!;
+    for (const type of [
+      "toString",
+      "constructor",
+      "__proto__",
+      "hasOwnProperty",
+      "valueOf",
+    ]) {
+      const result = run(schema, { type });
+      expect(result.issues, `type=${type}`).toBeDefined();
+      expect(result.issues?.[0]?.message).toMatch(/Unknown event type/);
+    }
+  });
+
+  it("degrades a payload with $defs/$ref to a valid discriminant branch", () => {
+    // A recursive/reused payload emits document-root-relative $refs; inlining
+    // would dangle them, so the branch must degrade rather than emit invalid JSON.
+    const recursive = <T>(): StandardSchema<T> =>
+      ({
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: (v: unknown) => ({ value: v as T }),
+          jsonSchema: {
+            output: () => ({
+              type: "object",
+              $defs: { Node: { type: "object" } },
+              properties: { child: { $ref: "#/$defs/Node" } },
+              required: ["child"],
+            }),
+          },
+        },
+      }) as unknown as StandardSchema<T>;
+
+    const m = setup({
+      schemas: { events: { TREE: recursive() } },
+    }).createMachine({ id: "m", initial: "a", states: { a: {} } });
+
+    const std = deriveEventSchema(m)!["~standard"] as {
+      jsonSchema?: {
+        output: (o: { target: string }) => {
+          anyOf: Array<Record<string, unknown>>;
+        };
+      };
+    };
+    const json = std.jsonSchema!.output({ target: "draft-2020-12" });
+    expect(json.anyOf[0]).toEqual({
+      type: "object",
+      properties: { type: { const: "TREE" } },
+      required: ["type"],
+    });
+    expect(JSON.stringify(json)).not.toMatch(/\$ref|\$defs/);
+  });
+
   it("stays permissive when every event schema is type-only", () => {
     const machine = setup({
       schemas: {
