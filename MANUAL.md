@@ -75,14 +75,15 @@ The repository currently exposes the integration from [`src/index.ts`](src/index
 The examples below therefore import from `./src`; replace that path with your
 package entrypoint if you package the integration.
 
-Define a fully typed machine and use the integration's Restate-aware
-`fromPromise` for external work:
+Define a fully typed machine. Use `fromHandler` for external work that needs the
+Restate `ctx` (as below, which journals a `fetch` with `ctx.run`); use
+`fromPromise` for ctx-less work (see [Promise actors](#promise-actors-and-external-effects)):
 
 ```ts
 import * as restate from "@restatedev/restate-sdk";
 import * as z from "zod";
 import { assign, setup } from "xstate";
-import { createMachineObject, fromPromise } from "./src";
+import { createMachineObject, fromHandler } from "./src";
 
 const OrderInputSchema = z.object({
   sku: z.string().min(1),
@@ -111,7 +112,7 @@ interface ReserveOutput {
   reservationId: string;
 }
 
-const reserveInventory = fromPromise<ReserveOutput, ReserveInput>(
+const reserveInventory = fromHandler<ReserveOutput, ReserveInput>(
   async ({ input, ctx }) =>
     ctx.run("reserve-inventory", async () => {
       const response = await fetch("https://inventory.example/reservations", {
@@ -195,13 +196,17 @@ const orders = createMachineObject("orders", orderMachine, {
 restate.endpoint().bind(orders).listen();
 ```
 
-The important import distinction is:
+The integration exposes two actor factories, and vanilla XState `fromPromise`
+remains usable:
 
 ```ts
-// Durable external effects: receives Restate ctx.
+// Ctx-less durable effect: fail-fast, or retryable with fromPromise(fn, { retry }).
 import { fromPromise } from "./src";
 
-// Ordinary XState promise actor: no Restate ctx.
+// Ctx-aware durable effect: the creator receives the Restate ctx.
+import { fromHandler } from "./src";
+
+// Ordinary XState promise actor: no ctx (still run durably by the runtime).
 import { fromPromise } from "xstate";
 ```
 
@@ -336,8 +341,8 @@ promise actor instead.
 
 Although the resulting `Step` is journaled for replay, pure and deterministic
 transition logic remains easier to test, reason about, and migrate. Use
-`ctx.date`, `ctx.rand`, or a `ctx.run` result inside a Restate-aware promise actor
-when a workflow decision needs time, randomness, or I/O.
+`ctx.date`, `ctx.rand`, or a `ctx.run` result inside a `fromHandler` actor when a
+workflow decision needs time, randomness, or I/O.
 
 ### Persist only serializable data
 
@@ -378,41 +383,83 @@ snapshot, not every transient microstate visited inside it.
 
 ## Promise actors and external effects
 
-### Restate-aware `fromPromise`
+The integration provides three actor flavors. All of them run out-of-band in the
+ingress-private `executeActor` handler and report back to the machine as `onDone`
+/ `onError`. The first two run inside `ctx.run`, so their side effect executes
+exactly once and their result is journaled (replay-safe); they differ only in how
+they treat errors. The third receives the Restate `ctx` and journals its own
+effects.
 
-The integration's `fromPromise` creator receives:
+### Basic `fromPromise` (ctx-less, fail-fast)
 
 ```ts
-{
-  input: TInput;
-  ctx: ObjectSharedContext;
-}
+import { fromPromise } from "./src";
+
+const chargeCard = fromPromise<Receipt, ChargeInput>(async ({ input }) => {
+  // ...no ctx; runs inside ctx.run for exactly-once durability.
+  return charge(input);
+});
 ```
 
-Use `ctx.run` for non-Restate calls and use Restate-native clients directly from
-`ctx` when calling other Restate services. Follow the Restate SDK's idempotency
-guidance for any external system: a process can fail after the external system
-accepts a request but before its result is durably recorded.
+The creator receives only `{ input }`. Any rejection routes to `onError` — there
+is no application-level retry (like vanilla xstate `fromPromise`, but durable).
 
-Its error behavior is deliberate:
+### Retryable `fromPromise` (ctx-less, retried)
 
-| Actor outcome          | Integration behavior                                                |
-| ---------------------- | ------------------------------------------------------------------- |
-| Returns a value        | Calls private `actorDone`; the machine receives `onDone`            |
-| Throws `TerminalError` | Calls private `actorError`; the machine enters `onError` if modeled |
-| Throws another error   | Rethrows from the Restate handler so Restate can retry              |
+```ts
+import { fromPromise } from "./src";
+
+// retry: true uses Restate's default policy; an object bounds attempts/backoff.
+const chargeCard = fromPromise<Receipt, ChargeInput>(
+  async ({ input }) => charge(input),
+  { retry: { maxRetryAttempts: 5, initialRetryInterval: 200 } },
+);
+```
+
+A transient rejection is retried by Restate's `ctx.run`. Throw a `TerminalError`
+to fail without retrying; exhausting the policy also routes to `onError`.
+
+### `fromHandler` (ctx-aware)
+
+```ts
+import { fromHandler } from "./src";
+
+const reserve = fromHandler<Reservation, ReserveInput>(
+  async ({ input, ctx }) => {
+    return ctx.run("reserve", () => reserveInventory(input));
+  },
+);
+```
+
+The creator receives `{ input, ctx }`. It runs directly — not wrapped in
+`ctx.run`, which would be illegal nested journaling — so it must journal its own
+side effects with `ctx.run`, and may use Restate-native clients from `ctx` when
+calling other Restate services. A `TerminalError` routes to `onError`; any other
+error is rethrown so Restate retries the whole invocation under its default
+policy. Follow the Restate SDK's idempotency guidance: a process can fail after
+an external system accepts a request but before its result is durably recorded.
+
+### Error behavior at a glance
+
+| Actor kind                   | Returns  | Throws `TerminalError` | Throws another error                  |
+| ---------------------------- | -------- | ---------------------- | ------------------------------------- |
+| `fromPromise` (basic)        | `onDone` | `onError`              | `onError` (no retry)                  |
+| `fromPromise` (retry)        | `onDone` | `onError`              | Retried by `ctx.run`; then `onError`  |
+| `fromHandler`                | `onDone` | `onError`              | Rethrown; Restate retries the handler |
+| Vanilla XState `fromPromise` | `onDone` | `onError`              | `onError` (no retry)                  |
 
 Use a `TerminalError` for a permanent business or input failure that retrying
-cannot fix. Throw an ordinary error for a transient operational failure.
+cannot fix. Throw an ordinary error for a transient operational failure only in
+the retryable or `fromHandler` variants.
 
 ### Vanilla XState `fromPromise`
 
-Ordinary XState promise actors remain supported, but receive no Restate context.
-Any rejection is normalized and immediately returned to the machine as an actor
-error event; it is not treated as a retryable Restate handler failure.
-
-That makes vanilla promise actors appropriate for self-contained asynchronous
-computation. They are not the preferred boundary for durable external I/O.
+Ordinary XState promise actors remain supported and receive no Restate context.
+They run through the XState actor lifecycle but still inside `ctx.run`, so their
+result is journaled exactly-once. Any rejection is normalized to `onError` with
+the original `{ name, message }` preserved; it is not retried. This makes vanilla
+actors appropriate for self-contained asynchronous computation; reach for the
+`fromPromise`/`fromHandler` variants when you want retries or the Restate `ctx`.
 
 ### Concurrent actors
 
@@ -599,7 +646,7 @@ repository, not every feature available in XState itself.
 | Guards, `assign`, `always`, immediate `raise`      | Supported              | Resolved during pure transition computation             |
 | Final output and tags                              | Supported              | Exposed in returned snapshots                           |
 | Shallow and deep history                           | Supported              | State-node references are serialized as IDs             |
-| Promise `invoke` and `spawn`                       | Supported              | Prefer the Restate-aware `fromPromise` for I/O          |
+| Promise `invoke` and `spawn`                       | Supported              | `fromPromise`/`fromHandler`; all run inside `ctx.run`   |
 | Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                      |
 | Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance        |
 | `sendTo`, `forwardTo`, `sendParent`                | Supported targets only | Self, known child, and parent routing                   |
@@ -644,8 +691,8 @@ modeling mistakes precisely.
 ### 2. Unit-test effect functions
 
 Move business I/O behind small typed functions. Test the decision-free
-function separately, then test the Restate-aware actor with a minimal fake
-context where practical. At minimum, cover:
+function separately, then test the actor with a minimal fake context where
+practical. At minimum, cover:
 
 - success and output mapping;
 - transient failure;
@@ -709,6 +756,9 @@ pnpm check
 # Full Vitest suite, including Restate testcontainers. Requires Docker.
 pnpm test
 
+# Only the e2e suite (Restate testcontainers). Requires Docker.
+pnpm test:e2e
+
 # Complete pre-merge validation.
 pnpm verify
 ```
@@ -721,9 +771,10 @@ concurrency, timers, awakeables, retries, or object-to-object delivery.
 
 ### The machine never leaves an invoke state
 
-Check which `fromPromise` was imported, whether the promise resolves, and
-whether its `onDone`/`onError` transitions exist. An ordinary error from the
-Restate-aware version is intentionally retried rather than sent to `onError`.
+Check which factory was used, whether the promise resolves, and whether its
+`onDone`/`onError` transitions exist. An ordinary error is retried (rather than
+sent to `onError`) for a retryable `fromPromise` or a `fromHandler`; basic
+`fromPromise` and vanilla actors instead route any error to `onError`.
 
 ### A named action did nothing
 
@@ -965,24 +1016,33 @@ is dropped rather than sent to the wrong object.
 
 ## Promise actor execution
 
-The integration's `fromPromise` returns real XState promise actor logic so that
-XState emits its normal spawn action. It also attaches:
+`fromPromise` and `fromHandler` return real XState promise actor logic so that
+XState emits its normal spawn action. They also attach a tag (a `restate.actor`
+sentinel plus a `kind` discriminant and the real creator) that lives in the
+Restate layer, not the pure core. The placeholder XState promise must never be
+started in the inert transition scope.
 
-- a sentinel identifying Restate-aware actor logic; and
-- the real creator function as configuration.
-
-The placeholder XState promise must never be started in the inert transition
-scope. The pure layer emits `runPromise`, and the Restate layer dispatches the
+The pure layer emits `runPromise`, and the Restate layer dispatches the
 ingress-private `executeActor` handler. `runActor` resolves named actor sources
-from machine implementations and then branches:
+from machine implementations, then dispatches by kind — one self-contained runner
+each, no shared branching:
 
-- Restate-aware actor: call its creator with `{ input, ctx }`; convert only
-  `TerminalError` to an error outcome; rethrow other errors for retry.
-- Vanilla actor: start it with XState `createActor`/`toPromise`; convert any
-  rejection to a serializable error outcome.
+- `promise` (basic) and vanilla actors: run once inside `ctx.run` via a shared
+  `runOnce` wrapper. A rejection is captured as the run's result (not rethrown),
+  so `ctx.run` never retries an application error, while a genuine infrastructure
+  crash is still retried. They differ only in the body: vanilla goes through
+  XState `createActor`/`toPromise`, a basic `fromPromise` calls its creator
+  directly.
+- `retryable`: run inside `ctx.run` with the actor's `RetryPolicy`. A non-terminal
+  rejection is retried; a `TerminalError` or an exhausted policy fails terminally.
+- `handler`: run the creator directly with `{ input, ctx }` (no `ctx.run`
+  wrapper — that would be illegal nested journaling); convert `TerminalError` to
+  an error outcome and rethrow anything else so Restate retries the invocation.
 
-Both paths normalize errors to plain `{ name, message }` data before that error
-is persisted or crosses an object boundary.
+All paths normalize errors to plain `{ name, message }` data before that error is
+persisted or crosses an object boundary. Because every actor result is journaled
+by `ctx.run` (except `handler`, which owns `ctx` and journals its own work), a
+side effect executes exactly once and is replay-safe.
 
 Every promise start gets a durable random execution ID. The shared actor handler
 returns its result to the same keyed object through one of two explicit,
@@ -1123,13 +1183,13 @@ For an XState upgrade:
 | [`src/xstate/snapshot.ts`](src/xstate/snapshot.ts)     | Snapshot serialization, history rehydration, public projection               |
 | [`src/xstate/registry.ts`](src/xstate/registry.ts)     | Reachable child-machine discovery and ID validation                          |
 | [`src/xstate/conditions.ts`](src/xstate/conditions.ts) | Pure waiter-condition validation and evaluation                              |
-| [`src/xstate/actors.ts`](src/xstate/actors.ts)         | Actor-source resolution, sentinel detection, error/event helpers             |
+| [`src/xstate/actors.ts`](src/xstate/actors.ts)         | Actor-source resolution and error/event helpers (pure)                       |
 | [`src/restate/contracts.ts`](src/restate/contracts.ts) | Pure runtime-contract parsing and public-event classification                |
 | [`src/restate/object.ts`](src/restate/object.ts)       | Virtual-object composition, handler/runtime classes, and transition pipeline |
 | [`src/restate/effects.ts`](src/restate/effects.ts)     | Abstract-effect execution, waiter settlement, terminal reporting             |
 | [`src/restate/state.ts`](src/restate/state.ts)         | Named accessors for all durable KV state                                     |
-| [`src/restate/promise.ts`](src/restate/promise.ts)     | Public Restate-aware `fromPromise` adapter                                   |
-| [`src/restate/run-actor.ts`](src/restate/run-actor.ts) | Out-of-band promise execution and error semantics                            |
+| [`src/restate/promise.ts`](src/restate/promise.ts)     | `fromPromise`/`fromHandler` factories, the actor tag, and `isRestateActor`   |
+| [`src/restate/run-actor.ts`](src/restate/run-actor.ts) | Per-kind out-of-band actor execution and error/retry semantics               |
 | [`src/restate/types.ts`](src/restate/types.ts)         | Restate handler, request, option, and child-record types                     |
 
 ## Contributor test strategy
@@ -1168,28 +1228,33 @@ High-value invariants to preserve include:
 - a child terminal event is reported once;
 - concurrent invokes cannot overwrite each other's context updates;
 - subscription is established before an optional triggering event;
-- transient Restate-aware actor errors retry, while terminal ones reach
-  `onError`; and
+- retryable and `fromHandler` actor errors retry, while basic `fromPromise` and
+  vanilla actor errors reach `onError`; terminal errors always reach `onError`;
+  and
 - every durable scenario behaves the same under forced replay.
 
 # Appendix A: API reference
 
 ## Exports
 
-| Export                  | Kind     | Purpose                                                        |
-| ----------------------- | -------- | -------------------------------------------------------------- |
-| `createMachineObject`   | Function | Convert a root XState machine into a Restate object definition |
-| `fromPromise`           | Function | Define a Restate-aware XState promise actor                    |
-| `RestatePromiseCreator` | Type     | Creator signature receiving `{ input, ctx }`                   |
-| `MachineObjectOptions`  | Type     | Restate options plus runtime contract and `finalStateTTL`      |
-| `MachineContract`       | Type     | Optional Standard Schema input/event contracts                 |
-| `StandardSchema`        | Type     | Library-neutral runtime-schema interface                       |
-| `MachineVirtualObject`  | Type     | Typed handler surface for SDK clients                          |
-| `WaitForRequest`        | Type     | Condition, optional timeout, and optional typed event          |
-| `SubscribeRequest`      | Type     | Condition plus an existing awakeable ID                        |
-| `StoredState`           | Type     | Internal serializable snapshot representation                  |
-| `ReturnedSnapshot`      | Type     | Public serializable snapshot projection                        |
-| `Condition`             | Type     | `done` or `hasTag:<tag>`                                       |
+| Export                 | Kind     | Purpose                                                                 |
+| ---------------------- | -------- | ----------------------------------------------------------------------- |
+| `createMachineObject`  | Function | Convert a root XState machine into a Restate object definition          |
+| `fromPromise`          | Function | Ctx-less durable promise actor; fail-fast, or retryable via `{ retry }` |
+| `fromHandler`          | Function | Ctx-aware durable actor; creator receives `{ input, ctx }`              |
+| `PromiseCreator`       | Type     | `fromPromise` creator signature receiving `{ input }`                   |
+| `HandlerCreator`       | Type     | `fromHandler` creator signature receiving `{ input, ctx }`              |
+| `FromPromiseOptions`   | Type     | `fromPromise` options (`retry?: boolean \| RetryPolicy`)                |
+| `RetryPolicy`          | Type     | `ctx.run` retry tuning (attempts, intervals, backoff)                   |
+| `MachineObjectOptions` | Type     | Restate options plus runtime contract and `finalStateTTL`               |
+| `MachineContract`      | Type     | Optional Standard Schema input/event contracts                          |
+| `StandardSchema`       | Type     | Library-neutral runtime-schema interface                                |
+| `MachineVirtualObject` | Type     | Typed handler surface for SDK clients                                   |
+| `WaitForRequest`       | Type     | Condition, optional timeout, and optional typed event                   |
+| `SubscribeRequest`     | Type     | Condition plus an existing awakeable ID                                 |
+| `StoredState`          | Type     | Internal serializable snapshot representation                           |
+| `ReturnedSnapshot`     | Type     | Public serializable snapshot projection                                 |
+| `Condition`            | Type     | `done` or `hasTag:<tag>`                                                |
 
 ## Public handlers
 

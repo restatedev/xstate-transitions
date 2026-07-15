@@ -44,6 +44,11 @@ supports:
   - `fromHandler(creator)` — the creator receives the Restate `ctx`
     (`ctx.run` / `ctx.date` / `ctx.rand`) and journals its own effects; a
     `TerminalError` routes to `onError`, any other error is retried by Restate.
+
+  `fromPromise` (both flavors) and vanilla xstate actors run inside `ctx.run`, so
+  a side effect executes exactly once and its result is journaled — replay-safe
+  by default. `fromHandler` runs directly (it already owns `ctx`).
+
 - **Delayed transitions** (`after`) and delayed events, with **cancellation**
   (`cancel(id)`), via guarded Restate delayed self-sends.
 - **`waitFor` / `subscribe`** on `done` / `hasTag:*` conditions, backed by
@@ -68,4 +73,4 @@ supports:
 supported — they require a long-lived in-process actor, which the
 stateless-between-requests model deliberately avoids. Model such cases by sending
 events into the machine externally, or with a recurring delayed self-event. See
-the skipped [stopwatchMachine.test.ts](test/stopwatchMachine.test.ts).
+the skipped [stopwatchMachine.test.ts](test/e2e/stopwatchMachine.test.ts).
