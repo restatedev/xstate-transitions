@@ -373,7 +373,7 @@ export function createMachineObject<
         },
       ),
 
-      executeActor: restate.handlers.object.shared(
+      executeActor: restate.createObjectSharedHandler(
         { ingressPrivate: true, enableLazyState: true },
         async (
           context: restate.ObjectSharedContext,
@@ -445,7 +445,7 @@ export function createMachineObject<
         setSubscriptions(context, subscriptions);
       },
 
-      waitFor: restate.handlers.object.shared(
+      waitFor: restate.createObjectSharedHandler(
         async (
           context: restate.ObjectSharedContext,
           request: WaitForRequest<M>,
