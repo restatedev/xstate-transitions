@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMachine, setup } from "xstate";
-import { MachineRuntime } from "../../src/restate/object/runtime";
+import { MachineRuntime } from "../../src/restate/object";
 
 describe("machine object runtime", () => {
   const child = createMachine({ id: "child" });

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createMachine } from "xstate";
-import { createMachineObject } from "../../src/restate/object";
-import { classifyKnownActors } from "../../src/restate/object/transitions";
+import {
+  classifyKnownActors,
+  createMachineObject,
+} from "../../src/restate/object";
 
 describe("createMachineObject configuration", () => {
   const machine = createMachine({ id: "machine" });
