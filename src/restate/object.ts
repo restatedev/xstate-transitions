@@ -16,6 +16,7 @@ import {
   type HandlerCtx,
 } from "./effects";
 import { runActor } from "./run-actor";
+import { KEYS, clearRuntimeState } from "./state";
 import type {
   MachineObjectOptions,
   MachineVirtualObject,
@@ -32,7 +33,7 @@ import type {
 async function validateNotDisposed(
   context: restate.ObjectSharedContext,
 ): Promise<void> {
-  if (await context.get<boolean>("disposed")) {
+  if (await context.get<boolean>(KEYS.disposed)) {
     throw new restate.TerminalError(
       "The state machine has been disposed after reaching it's final state",
       { errorCode: 410 },
@@ -43,11 +44,19 @@ async function validateNotDisposed(
 async function validateExists(
   context: restate.ObjectSharedContext,
 ): Promise<void> {
-  if ((await context.get<StoredState>("state")) == null) {
+  if ((await context.get<StoredState>(KEYS.state)) == null) {
     throw new restate.TerminalError(
       "No state machine found for this workflow ID. Call 'create' first.",
       { errorCode: 404 },
     );
+  }
+}
+
+function validateCondition(condition: string): void {
+  if (!isValidCondition(condition)) {
+    throw new restate.TerminalError("Invalid subscription condition", {
+      errorCode: 400,
+    });
   }
 }
 
@@ -63,10 +72,7 @@ export function createMachineObject<
   const self = selfDef(name);
   const finalStateTTL = options?.finalStateTTL;
 
-  async function getMachine(
-    context: restate.ObjectSharedContext,
-  ): Promise<AnyStateMachine> {
-    const id = await context.get<string>("machineId");
+  function getMachine(id: string | null): AnyStateMachine {
     return (id != null ? registry.get(id) : undefined) ?? machine;
   }
 
@@ -76,8 +82,8 @@ export function createMachineObject<
     return {
       ctx: context,
       self,
-      parentKey: (await context.get<string>("parentKey")) ?? undefined,
-      invokeId: (await context.get<string>("invokeId")) ?? undefined,
+      parentKey: (await context.get<string>(KEYS.parentKey)) ?? undefined,
+      invokeId: (await context.get<string>(KEYS.invokeId)) ?? undefined,
       finalStateTTL,
     };
   }
@@ -86,7 +92,7 @@ export function createMachineObject<
     h: HandlerCtx,
     result: ReturnType<typeof step>,
   ): Promise<void> {
-    h.ctx.set("state", result.nextState);
+    h.ctx.set(KEYS.state, result.nextState);
     await executeEffects(h, result.effects);
     await settleSubscriptions(h, result.returned);
     await reportTerminal(h, result.returned);
@@ -97,12 +103,14 @@ export function createMachineObject<
     context: restate.ObjectContext,
     event: EventFrom<M>,
   ): Promise<void> {
-    const stored = await context.get<StoredState>("state");
+    const stored = await context.get<StoredState>(KEYS.state);
     if (stored == null) return;
-    const instanceMachine = await getMachine(context);
     const h = await handlerCtx(context);
+    const instanceMachine = getMachine(
+      await context.get<string>(KEYS.machineId),
+    );
     const knownChildIds = Object.keys(
-      (await context.get<Record<string, ChildRecord>>("children")) ?? {},
+      (await context.get<Record<string, ChildRecord>>(KEYS.children)) ?? {},
     );
     const result = step(instanceMachine, {
       stored,
@@ -117,46 +125,41 @@ export function createMachineObject<
     name,
     handlers: {
       create: async (context: restate.ObjectContext, input: InputFrom<M>) => {
-        context.clear("disposed");
-        context.clear("subscriptions");
-        context.clear("scheduled");
-        context.clear("children");
-        context.clear("reported");
-        context.clear("machineId");
-        context.clear("parentKey");
-        context.clear("invokeId");
+        clearRuntimeState(context);
+        context.clear(KEYS.machineId);
+        context.clear(KEYS.parentKey);
+        context.clear(KEYS.invokeId);
 
         const h = await handlerCtx(context);
-        const result = step(machine, {
-          stored: null,
-          input,
-          isChild: false,
-          knownChildIds: [],
-        });
-        await commit(h, result);
+        await commit(
+          h,
+          step(machine, {
+            stored: null,
+            input,
+            isChild: false,
+            knownChildIds: [],
+          }),
+        );
       },
 
       _init: restate.handlers.object.exclusive(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, request: InitRequest) => {
-          context.clear("disposed");
-          context.clear("subscriptions");
-          context.clear("scheduled");
-          context.clear("children");
-          context.clear("reported");
-          context.set("machineId", request.machineId);
-          context.set("parentKey", request.parentKey);
-          context.set("invokeId", request.invokeId);
+          clearRuntimeState(context);
+          context.set(KEYS.machineId, request.machineId);
+          context.set(KEYS.parentKey, request.parentKey);
+          context.set(KEYS.invokeId, request.invokeId);
 
-          const childMachine = registry.get(request.machineId) ?? machine;
           const h = await handlerCtx(context);
-          const result = step(childMachine, {
-            stored: null,
-            input: request.input,
-            isChild: true,
-            knownChildIds: [],
-          });
-          await commit(h, result);
+          await commit(
+            h,
+            step(getMachine(request.machineId), {
+              stored: null,
+              input: request.input,
+              isChild: true,
+              knownChildIds: [],
+            }),
+          );
         },
       ),
 
@@ -171,13 +174,13 @@ export function createMachineObject<
         async (context: restate.ObjectContext, request: ScheduledEvent) => {
           const scheduled =
             (await context.get<Record<string, ScheduledDelivery>>(
-              "scheduled",
+              KEYS.scheduled,
             )) ?? {};
           const entry = scheduled[request.sendId];
           if (!entry || entry.uuid !== request.uuid) return;
 
           delete scheduled[request.sendId];
-          context.set("scheduled", scheduled);
+          context.set(KEYS.scheduled, scheduled);
 
           if (entry.targetKey === context.key) {
             await applyEvent(context, entry.event as EventFrom<M>);
@@ -193,7 +196,9 @@ export function createMachineObject<
           context: restate.ObjectSharedContext,
           request: ExecuteRequest,
         ) => {
-          const instanceMachine = await getMachine(context);
+          const instanceMachine = getMachine(
+            await context.get<string>(KEYS.machineId),
+          );
           const event = await runActor(
             instanceMachine,
             request.params,
@@ -208,8 +213,10 @@ export function createMachineObject<
       ): Promise<ReturnedSnapshot> => {
         await validateNotDisposed(context);
         await validateExists(context);
-        const instanceMachine = await getMachine(context);
-        const stored = (await context.get<StoredState>("state"))!;
+        const instanceMachine = getMachine(
+          await context.get<string>(KEYS.machineId),
+        );
+        const stored = (await context.get<StoredState>(KEYS.state))!;
         return toReturnedSnapshot(fromStored(instanceMachine, stored));
       },
 
@@ -219,14 +226,12 @@ export function createMachineObject<
       ) => {
         await validateNotDisposed(context);
         await validateExists(context);
-        if (!isValidCondition(request.condition)) {
-          throw new restate.TerminalError("Invalid subscription condition", {
-            errorCode: 400,
-          });
-        }
+        validateCondition(request.condition);
 
-        const instanceMachine = await getMachine(context);
-        const stored = (await context.get<StoredState>("state"))!;
+        const instanceMachine = getMachine(
+          await context.get<string>(KEYS.machineId),
+        );
+        const stored = (await context.get<StoredState>(KEYS.state))!;
         const returned = toReturnedSnapshot(
           fromStored(instanceMachine, stored),
         );
@@ -241,8 +246,9 @@ export function createMachineObject<
         }
 
         const subscriptions =
-          (await context.get<Record<string, Subscription>>("subscriptions")) ??
-          {};
+          (await context.get<Record<string, Subscription>>(
+            KEYS.subscriptions,
+          )) ?? {};
         const existing = subscriptions[request.condition];
         if (existing) {
           existing.awakeables.push(request.awakeableId);
@@ -251,7 +257,7 @@ export function createMachineObject<
             awakeables: [request.awakeableId],
           };
         }
-        context.set("subscriptions", subscriptions);
+        context.set(KEYS.subscriptions, subscriptions);
       },
 
       waitFor: restate.handlers.object.shared(
@@ -261,11 +267,7 @@ export function createMachineObject<
         ): Promise<ReturnedSnapshot> => {
           await validateNotDisposed(context);
           await validateExists(context);
-          if (!isValidCondition(request.condition)) {
-            throw new restate.TerminalError("Invalid subscription condition", {
-              errorCode: 400,
-            });
-          }
+          validateCondition(request.condition);
 
           const { id, promise } = context.awakeable<ReturnedSnapshot>();
 
@@ -285,6 +287,7 @@ export function createMachineObject<
           } catch (e) {
             if (!(e instanceof restate.TerminalError)) throw e;
             if (e.code != 500) throw e;
+            // awakeable rejection -> 412 so clients know it is non-transient
             throw new restate.TerminalError(e.message, { errorCode: 412 });
           }
         },
@@ -292,10 +295,9 @@ export function createMachineObject<
 
       cleanupState: restate.handlers.object.exclusive(
         { ingressPrivate: true },
-
         async (context: restate.ObjectContext) => {
           context.clearAll();
-          context.set("disposed", true);
+          context.set(KEYS.disposed, true);
         },
       ),
     } satisfies MachineVirtualObject<M>,

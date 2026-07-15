@@ -3,6 +3,7 @@ import * as restate from "@restatedev/restate-sdk";
 import type { ReturnedSnapshot } from "../xstate/snapshot";
 import { evaluateCondition } from "../xstate/conditions";
 import { normalizeError } from "../xstate/actors";
+import { KEYS } from "./state";
 import type { Effect, Target } from "../xstate/interpret";
 import type {
   MachineVirtualObject,
@@ -86,9 +87,9 @@ export async function executeEffects(
   effects: Effect[],
 ): Promise<void> {
   const scheduled =
-    (await h.ctx.get<Record<string, ScheduledDelivery>>("scheduled")) ?? {};
+    (await h.ctx.get<Record<string, ScheduledDelivery>>(KEYS.scheduled)) ?? {};
   const children =
-    (await h.ctx.get<Record<string, ChildRecord>>("children")) ?? {};
+    (await h.ctx.get<Record<string, ChildRecord>>(KEYS.children)) ?? {};
   let scheduledChanged = false;
   let childrenChanged = false;
 
@@ -143,8 +144,8 @@ export async function executeEffects(
     }
   }
 
-  if (scheduledChanged) h.ctx.set("scheduled", scheduled);
-  if (childrenChanged) h.ctx.set("children", children);
+  if (scheduledChanged) h.ctx.set(KEYS.scheduled, scheduled);
+  if (childrenChanged) h.ctx.set(KEYS.children, children);
 }
 
 /** Resolve/reject awakeables whose condition is now decided by the snapshot. */
@@ -153,7 +154,7 @@ export async function settleSubscriptions(
   returned: ReturnedSnapshot,
 ): Promise<void> {
   const subscriptions =
-    (await h.ctx.get<Record<string, Subscription>>("subscriptions")) ?? {};
+    (await h.ctx.get<Record<string, Subscription>>(KEYS.subscriptions)) ?? {};
 
   let changed = false;
   for (const [condition, subscription] of Object.entries(subscriptions)) {
@@ -171,7 +172,7 @@ export async function settleSubscriptions(
     changed = true;
   }
 
-  if (changed) h.ctx.set("subscriptions", subscriptions);
+  if (changed) h.ctx.set(KEYS.subscriptions, subscriptions);
 }
 
 /** If this is a child instance, report its terminal state back to the parent. */
@@ -181,8 +182,8 @@ export async function reportTerminal(
 ): Promise<void> {
   if (h.parentKey == null || h.invokeId == null) return;
   if (returned.status !== "done" && returned.status !== "error") return;
-  if (await h.ctx.get<boolean>("reported")) return;
-  h.ctx.set("reported", true);
+  if (await h.ctx.get<boolean>(KEYS.reported)) return;
+  h.ctx.set(KEYS.reported, true);
 
   const parent = sendClient(h.ctx, h.self, h.parentKey);
   if (returned.status === "done") {

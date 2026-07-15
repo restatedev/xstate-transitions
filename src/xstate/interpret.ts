@@ -1,4 +1,8 @@
-import type { AnyStateMachine, AnyEventObject } from "xstate";
+import type {
+  AnyStateMachine,
+  AnyMachineSnapshot,
+  AnyEventObject,
+} from "xstate";
 import {
   toStored,
   fromStored,
@@ -62,94 +66,107 @@ export interface Step {
   effects: Effect[];
 }
 
-type Action = { type: string; params: Record<string, unknown> };
+// The executable actions xstate emits carry loosely-typed params; these describe
+// the shapes we read, narrowed once per case rather than inline.
+interface RaiseParams {
+  event: AnyEventObject;
+  id: string;
+  delay?: number;
+}
+interface SendToParams extends RaiseParams {
+  to?: unknown;
+  targetId?: string;
+}
+interface CancelParams {
+  sendId: string;
+}
 
-function targetOf(params: Record<string, unknown>): Target | undefined {
+interface Action {
+  type: string;
+  params: Record<string, unknown>;
+}
+
+function scheduleSend(
+  sendId: string,
+  target: Target,
+  event: AnyEventObject,
+  delay: number,
+): Effect {
+  return { kind: "scheduleSend", sendId, target, event, delay };
+}
+
+function targetOf(params: SendToParams): Target | undefined {
   const to = params.to;
   const targetId =
-    (params.targetId as string | undefined) ??
+    params.targetId ??
     (typeof to === "string" ? to : (to as { id?: string } | undefined)?.id);
   if (targetId === undefined) return undefined;
-  if (targetId === PARENT_ID) return { type: "parent" };
-  return { type: "child", childId: targetId };
+  return targetId === PARENT_ID
+    ? { type: "parent" }
+    : { type: "child", childId: targetId };
 }
 
 function interpretActions(
-  snapshot: { children?: Record<string, { logic?: unknown } | undefined> },
+  snapshot: AnyMachineSnapshot,
   actions: Action[],
   knownChildIds: readonly string[],
 ): Effect[] {
   const effects: Effect[] = [];
   const started = new Set(knownChildIds);
 
-  const spawnInputs: Record<string, unknown> = {};
+  const spawnInputs = new Map<string, unknown>();
   for (const action of actions) {
     if (action.type === "xstate.spawnChild") {
-      spawnInputs[action.params.id as string] = action.params.input;
+      const params = action.params as SpawnParams;
+      spawnInputs.set(params.id, params.input);
     }
   }
 
   // Reconcile child MACHINE actors (covers both invoke and assign-spawn).
-  for (const [childId, ref] of Object.entries(snapshot.children ?? {})) {
+  for (const [childId, ref] of Object.entries(snapshot.children)) {
     if (started.has(childId)) continue;
-    const logic = ref?.logic;
+    const logic = (ref as { logic?: unknown } | undefined)?.logic;
     if (!isMachine(logic)) continue;
     started.add(childId);
     effects.push({
       kind: "startChild",
       childId,
       machineId: logic.id,
-      input: spawnInputs[childId],
+      input: spawnInputs.get(childId),
     });
   }
 
   for (const action of actions) {
     switch (action.type) {
       case "xstate.spawnChild": {
+        const params = action.params as SpawnParams;
         // machine children are started above; only promise/plain actors run here
-        if (!started.has(action.params.id as string)) {
-          effects.push({
-            kind: "runPromise",
-            params: action.params as SpawnParams,
-          });
+        if (!started.has(params.id)) {
+          effects.push({ kind: "runPromise", params });
         }
         break;
       }
       case "xstate.raise": {
-        if (action.params.delay) {
-          effects.push({
-            kind: "scheduleSend",
-            sendId: action.params.id as string,
-            target: { type: "self" },
-            event: action.params.event as AnyEventObject,
-            delay: action.params.delay as number,
-          });
-        }
+        const { event, id, delay } = action.params as unknown as RaiseParams;
         // zero-delay raises are already drained inside the macrostep
+        if (delay)
+          effects.push(scheduleSend(id, { type: "self" }, event, delay));
         break;
       }
       case "xstate.sendTo": {
-        const target = targetOf(action.params);
+        const params = action.params as unknown as SendToParams;
+        const target = targetOf(params);
         if (!target) break;
-        const event = action.params.event as AnyEventObject;
-        if (action.params.delay) {
-          effects.push({
-            kind: "scheduleSend",
-            sendId: action.params.id as string,
-            target,
-            event,
-            delay: action.params.delay as number,
-          });
-        } else {
-          effects.push({ kind: "send", target, event });
-        }
+        effects.push(
+          params.delay
+            ? scheduleSend(params.id, target, params.event, params.delay)
+            : { kind: "send", target, event: params.event },
+        );
         break;
       }
       case "xstate.cancel": {
-        effects.push({
-          kind: "cancel",
-          sendId: action.params.sendId as string,
-        });
+        const { sendId } = action.params as unknown as CancelParams;
+        effects.push({ kind: "cancel", sendId });
         break;
       }
       default:
@@ -160,40 +177,39 @@ function interpretActions(
   return effects;
 }
 
+// resolveState drops live children; re-inject stub refs for known children so
+// sendTo/forwardTo targeting them resolve to routable actions.
+function injectStubChildren(
+  snapshot: AnyMachineSnapshot,
+  knownChildIds: readonly string[],
+): void {
+  const children = snapshot.children as Record<string, unknown>;
+  for (const childId of knownChildIds) {
+    children[childId] ??= stubChildRef(childId);
+  }
+}
+
 /** Compute the next persisted state and the effects to execute. Pure. */
 export function step(machine: AnyStateMachine, input: StepInput): Step {
-  let snapshot;
+  let snapshot: AnyMachineSnapshot;
   let actions: Action[];
 
   if (input.stored == null) {
     [snapshot, actions] = runInitial(machine, input.input, input.isChild);
   } else {
-    const rehydrated = fromStored(machine, input.stored) as {
-      children: Record<string, unknown>;
-    };
-    // Re-inject stub child refs (dropped by resolveState) so sendTo/forwardTo resolve.
-    for (const childId of input.knownChildIds) {
-      if (!rehydrated.children[childId]) {
-        rehydrated.children[childId] = stubChildRef(childId);
-      }
-    }
+    snapshot = fromStored(machine, input.stored);
+    injectStubChildren(snapshot, input.knownChildIds);
     [snapshot, actions] = runTransition(
       machine,
-      rehydrated as never,
+      snapshot,
       input.event,
       input.isChild,
     );
   }
 
-  const effects = interpretActions(
-    snapshot as { children?: Record<string, { logic?: unknown }> },
-    actions,
-    input.knownChildIds,
-  );
-
   return {
     nextState: toStored(snapshot),
     returned: toReturnedSnapshot(snapshot),
-    effects,
+    effects: interpretActions(snapshot, actions, input.knownChildIds),
   };
 }
