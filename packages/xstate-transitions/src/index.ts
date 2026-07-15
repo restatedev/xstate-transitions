@@ -19,7 +19,6 @@ export type {
   RetryPolicy,
 } from "./restate/promise";
 export type {
-  MachineContract,
   MachineObjectOptions,
   MachineVirtualObject,
   StandardSchema,

@@ -25,16 +25,18 @@
  */
 
 import { setup, types } from "xstate";
+import { z } from "zod";
 import {
   createMachineObject,
   fromPromise,
 } from "@restatedev/xstate-transitions";
 
-interface Lender {
-  name: string;
-  address: string;
-  phone: string;
-}
+const Lender = z.object({
+  name: z.string(),
+  address: z.string(),
+  phone: z.string(),
+});
+type Lender = z.infer<typeof Lender>;
 
 type BookStatus = "onloan" | "available" | "unknown";
 
@@ -53,12 +55,12 @@ export const bookLendingMachine = setup({
       lender: Lender | null;
     }>(),
     events: {
-      bookLendingRequest: types<{
-        book: { title: string; id: string };
-        lender: Lender;
-      }>(),
-      holdBook: types<Record<string, never>>(),
-      declineBookhold: types<Record<string, never>>(),
+      bookLendingRequest: z.object({
+        book: z.object({ title: z.string(), id: z.string() }),
+        lender: Lender,
+      }),
+      holdBook: z.object({}),
+      declineBookhold: z.object({}),
     },
   },
   actorSources: {

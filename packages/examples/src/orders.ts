@@ -24,24 +24,26 @@
  *   - a `final` state with `tags` and `output`, which `waitFor("hasTag:ready")`
  *     and the returned snapshot expose.
  *
- * TIP: `types<T>()` vanishes at runtime. Swap it for a real Standard Schema
- * (Zod, Valibot, ArkType, …) in `schemas` and `createMachineObject` derives the
- * ingress serdes automatically — no `contract` needed — validating and coercing
- * `create`/`send`. Pass an explicit `contract` only to override. See MANUAL.md
- * ("Runtime ingress contracts").
+ * This example uses real Zod schemas in `schemas`, so `createMachineObject`
+ * derives the ingress serdes automatically — validating and coercing
+ * `create`/`send` and publishing JSON Schemas to Restate discovery. (Type-only
+ * `types<T>()` erases at runtime and yields no schema; see MANUAL.md, "Runtime
+ * ingress validation".)
  */
 
 import * as restate from "@restatedev/restate-sdk";
 import { setup, types } from "xstate";
+import { z } from "zod";
 import {
   createMachineObject,
   fromHandler,
 } from "@restatedev/xstate-transitions";
 
-interface OrderInput {
-  sku: string;
-  quantity: number;
-}
+const OrderInput = z.object({
+  sku: z.string(),
+  quantity: z.number(),
+});
+type OrderInput = z.infer<typeof OrderInput>;
 
 interface ReserveOutput {
   reservationId: string;
@@ -62,7 +64,7 @@ const reserveInventory = fromHandler<ReserveOutput, OrderInput>(
 
 export const orderMachine = setup({
   schemas: {
-    input: types<OrderInput>(),
+    input: OrderInput,
     context: types<
       OrderInput & {
         reservationId: string | null;
@@ -70,10 +72,10 @@ export const orderMachine = setup({
       }
     >(),
     events: {
-      SUBMIT: types<Record<string, never>>(),
-      CANCEL: types<Record<string, never>>(),
+      SUBMIT: z.object({}),
+      CANCEL: z.object({}),
       // A typed payload: `event.quantity` is a `number` in the transition.
-      ADJUST: types<{ quantity: number }>(),
+      ADJUST: z.object({ quantity: z.number() }),
     },
   },
   actorSources: {

@@ -55,22 +55,13 @@ export interface StandardSchema<T> {
   };
 }
 
-/** Runtime contracts for values accepted through the public object ingress. */
-export interface MachineContract<M extends AnyStateMachine = AnyStateMachine> {
-  readonly input?: StandardSchema<InputFrom<M>>;
-  readonly event?: StandardSchema<EventFrom<M>>;
-}
-
-export type MachineObjectOptions<M extends AnyStateMachine = AnyStateMachine> =
-  {
-    /**
-     * If set, an instance is disposed this many milliseconds after it reaches a
-     * final state. After disposal, all handlers reject with a 410 TerminalError.
-     */
-    readonly finalStateTTL?: number;
-    /** Optional runtime validation for public create/send ingress. */
-    readonly contract?: MachineContract<M>;
-  } & ObjectOptions;
+export type MachineObjectOptions = {
+  /**
+   * If set, an instance is disposed this many milliseconds after it reaches a
+   * final state. After disposal, all handlers reject with a 410 TerminalError.
+   */
+  readonly finalStateTTL?: number;
+} & ObjectOptions;
 
 /** Payload of the internal `executeActor` handler. */
 export interface ExecuteRequest {

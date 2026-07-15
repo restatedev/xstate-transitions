@@ -13,6 +13,7 @@
   "dependencies": {
     "@restatedev/restate-sdk": "catalog:",
     "@restatedev/xstate-transitions": "workspace:*",
-    "xstate": "catalog:"
+    "xstate": "catalog:",
+    "zod": "^4.4.3"
   }
 }

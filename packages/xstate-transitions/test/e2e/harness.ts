@@ -20,9 +20,8 @@ import {
 /**
  * A machine-actor factory bound to a replay mode. Same shape as
  * {@link createRestateTestActor}, minus the `alwaysReplay` flag (the harness
- * supplies it). Bind `M` explicitly (e.g. `createActor<Snap, typeof machine>`)
- * when passing a runtime `contract`, so its event/input schemas typecheck
- * against the concrete machine.
+ * supplies it). `M` may be bound explicitly (e.g. `createActor<Snap, typeof
+ * machine>`) to reflect the concrete machine's types.
  */
 export type CreateActor = <
   SnapshotType,

@@ -23,10 +23,7 @@ export type RunMachineOptions<M extends AnyStateMachine = AnyStateMachine> = {
   machine: M;
   key?: string;
   input?: unknown;
-  // Bound to the concrete machine so a runtime contract's event/input schemas
-  // typecheck. In v6 `EventFrom<AnyStateMachine>` is `never`, so the default
-  // param would reject a concrete `StandardSchema<SomeEvent>`.
-  options?: MachineObjectOptions<M>;
+  options?: MachineObjectOptions;
   /**
    * Force restate-server to always replay at suspension points, surfacing any
    * non-determinism in the handlers. Set by the parameterized e2e harness.

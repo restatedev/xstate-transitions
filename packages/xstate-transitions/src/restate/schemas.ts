@@ -14,9 +14,9 @@
  *
  * XState v6 keeps `schemas` on the machine at runtime, and each entry is a
  * Standard Schema — the very interface Restate's `serde.schema(...)` consumes.
- * So a machine that already declares `schemas.input` / `schemas.events` needs no
- * separate `contract`: we can validate (and coerce) the public `create`/`send`
- * boundary from the schemas the author wrote once.
+ * So the public `create`/`send` boundary is validated (and coerced) from the
+ * `schemas.input` / `schemas.events` the author wrote once, with no separate
+ * configuration.
  *
  * Two caveats shape this module:
  *   - `types<T>()` is type-only. Its validator is the identity function, so it is
@@ -25,8 +25,7 @@
  *     discriminant. `eventSchema` adapts that map into one Standard Schema over
  *     the whole `{ type, ...payload }` event.
  *
- * `contract` in `MachineObjectOptions` still wins when present; these are only
- * the defaults (see object.ts).
+ * These are the sole source of the public `create`/`send` serdes (see object.ts).
  */
 
 import { isTypeSchema, type StandardSchemaV1 } from "xstate";
@@ -81,6 +80,38 @@ export function deriveEventSchema<M extends AnyStateMachine>(
   return eventSchema<EventFrom<M>>(events);
 }
 
+/**
+ * The permissive fallback used for `send` when a machine declares no real event
+ * schema (no events, or only `types<T>()`). It accepts any `{ type, ...payload }`
+ * object and publishes that minimal envelope to discovery, so `send` always
+ * advertises at least the event shape. It does not coerce, and it does not judge
+ * the `type` beyond requiring a non-empty string — the send handler still
+ * rejects the reserved `xstate.*` namespace.
+ */
+export function genericEventSchema<E>(): StandardSchema<E> {
+  const validate = (value: unknown): StandardSchemaResult<E> =>
+    eventType(value) === undefined
+      ? issue(
+          "A machine event must be an object with a non-empty string 'type'.",
+        )
+      : { value: value as E };
+
+  const output = (): Record<string, unknown> => ({
+    type: "object",
+    properties: { type: { type: "string" } },
+    required: ["type"],
+  });
+
+  return {
+    "~standard": {
+      version: 1,
+      vendor: "restate.xstate.events",
+      validate,
+      jsonSchema: { input: output, output },
+    },
+  } as unknown as StandardSchema<E>;
+}
+
 /** A Standard Schema that actually validates, or `undefined` for type-only ones. */
 function realSchema<T>(
   candidate: StandardSchemaV1 | undefined,
@@ -96,48 +127,127 @@ function realSchema<T>(
  * the (possibly coerced) result. Unknown types and asynchronous validators are
  * rejected. It never throws: `restate.serde.schema` probes `validate(undefined)`
  * at construction, so every path returns a Standard Schema result.
+ *
+ * It also implements the Standard JSON Schema extension (`~standard.jsonSchema`)
+ * by composing the per-type payload schemas into a discriminated `anyOf`, so the
+ * whole event surfaces in Restate discovery — mirroring how a real schema
+ * library exposes its own JSON Schema. Without this the adapter would erase the
+ * payload schemas' discovery info.
  */
 function eventSchema<E>(
   events: Readonly<Record<string, StandardSchemaV1>>,
 ): StandardSchema<E> {
   const allowed = Object.keys(events);
+
+  const validate = (value: unknown): StandardSchemaResult<E> => {
+    const type = eventType(value);
+    if (type === undefined) {
+      return issue(
+        "A machine event must be an object with a non-empty string 'type'.",
+      );
+    }
+
+    const payloadSchema = events[type];
+    if (payloadSchema === undefined) {
+      return issue(
+        `Unknown event type "${type}". Expected one of: ${allowed.join(", ")}.`,
+      );
+    }
+
+    const { type: _type, ...payload } = value as Record<string, unknown>;
+    const result = payloadSchema["~standard"].validate(payload);
+    if (isThenable(result)) {
+      return issue(
+        `Asynchronous schema validation is not supported (event "${type}").`,
+      );
+    }
+    if (result.issues !== undefined) {
+      return { issues: result.issues };
+    }
+
+    // Reattach the discriminant onto the (possibly coerced) payload.
+    return {
+      value: { ...(result.value as Record<string, unknown>), type } as E,
+    };
+  };
+
+  const toJsonSchema = (
+    options: JsonSchemaOptions,
+  ): Record<string, unknown> => ({
+    anyOf: allowed.map((type) =>
+      eventBranchJsonSchema(type, events[type], options),
+    ),
+  });
+
   return {
     "~standard": {
       version: 1,
       vendor: "restate.xstate.events",
-      validate: (value: unknown): StandardSchemaResult<E> => {
-        const type = eventType(value);
-        if (type === undefined) {
-          return issue(
-            "A machine event must be an object with a non-empty string 'type'.",
-          );
-        }
-
-        const payloadSchema = events[type];
-        if (payloadSchema === undefined) {
-          return issue(
-            `Unknown event type "${type}". Expected one of: ${allowed.join(", ")}.`,
-          );
-        }
-
-        const { type: _type, ...payload } = value as Record<string, unknown>;
-        const result = payloadSchema["~standard"].validate(payload);
-        if (isThenable(result)) {
-          return issue(
-            `Asynchronous schema validation is not supported (event "${type}").`,
-          );
-        }
-        if (result.issues !== undefined) {
-          return { issues: result.issues };
-        }
-
-        // Reattach the discriminant onto the (possibly coerced) payload.
-        return {
-          value: { ...(result.value as Record<string, unknown>), type } as E,
-        };
-      },
+      validate,
+      jsonSchema: { input: toJsonSchema, output: toJsonSchema },
     },
+  } as unknown as StandardSchema<E>;
+}
+
+/** Options passed to a Standard JSON Schema converter. */
+interface JsonSchemaOptions {
+  readonly target: string;
+  readonly libraryOptions?: Record<string, unknown> | undefined;
+}
+
+/** The Standard JSON Schema extension a payload schema may carry. */
+interface JsonSchemaConverter {
+  readonly output?: (options: JsonSchemaOptions) => Record<string, unknown>;
+}
+
+/** A single event's JSON Schema: its payload with a `type` const discriminant. */
+function eventBranchJsonSchema(
+  type: string,
+  schema: StandardSchemaV1 | undefined,
+  options: JsonSchemaOptions,
+): Record<string, unknown> {
+  const payload =
+    schema === undefined ? undefined : payloadJsonSchema(schema, options);
+  if (payload !== undefined && payload.type === "object") {
+    const {
+      $schema: _schema,
+      properties,
+      required,
+      ...rest
+    } = payload as {
+      $schema?: unknown;
+      properties?: Record<string, unknown>;
+      required?: readonly string[];
+      [key: string]: unknown;
+    };
+    return {
+      ...rest,
+      type: "object",
+      properties: { type: { const: type }, ...(properties ?? {}) },
+      required: Array.from(new Set(["type", ...(required ?? [])])),
+    };
+  }
+  return {
+    type: "object",
+    properties: { type: { const: type } },
+    required: ["type"],
   };
+}
+
+/** A payload schema's JSON Schema via the Standard extension, or `undefined`. */
+function payloadJsonSchema(
+  schema: StandardSchemaV1,
+  options: JsonSchemaOptions,
+): Record<string, unknown> | undefined {
+  const converter = (
+    schema["~standard"] as { jsonSchema?: JsonSchemaConverter }
+  ).jsonSchema;
+  if (converter?.output === undefined) return undefined;
+  try {
+    return converter.output(options);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The non-empty string `type` of an event-shaped value, else `undefined`. */

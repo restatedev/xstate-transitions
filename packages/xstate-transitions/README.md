@@ -68,10 +68,11 @@ supports:
   (`cancel(id)`), via guarded Restate delayed self-sends.
 - **`waitFor` / `subscribe`** on `done` / `hasTag:*` conditions, backed by
   Restate awakeables, plus tag exposure on snapshots.
-- **Runtime ingress contracts** for machine input and public events through
-  library-neutral [Standard Schema](https://standardschema.dev/) validators
-  (including Zod 4), applied consistently to `create`, `send`, and the optional
-  event carried by `waitFor`.
+- **Ingress validation from the machine's own `schemas`** — real
+  [Standard Schema](https://standardschema.dev/) validators (e.g. Zod 4) on
+  `schemas.input` / `schemas.events` validate and coerce `create`, `send`, and
+  the optional event carried by `waitFor`, and surface as JSON Schemas in Restate
+  discovery.
 - **`finalStateTTL`** disposal of completed instances.
 - **Cross-machine messaging**: `invoke` / `spawn` of a child machine runs it as
   its own virtual object (keyed `${parent}::${childId}`), with `enq.sendTo` to a
