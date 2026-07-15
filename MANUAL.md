@@ -1114,23 +1114,30 @@ For an XState upgrade:
 
 ## Source map
 
-| Module                                                 | Responsibility                                                   |
-| ------------------------------------------------------ | ---------------------------------------------------------------- |
-| [`src/index.ts`](src/index.ts)                         | Public exports                                                   |
-| [`src/xstate/types.ts`](src/xstate/types.ts)           | Persisted, returned, step, target, and effect types              |
-| [`src/xstate/interpret.ts`](src/xstate/interpret.ts)   | Pure initial/resume steps and XState-action translation          |
-| [`src/xstate/scope.ts`](src/xstate/scope.ts)           | Inert and parent-aware XState execution scope                    |
-| [`src/xstate/snapshot.ts`](src/xstate/snapshot.ts)     | Snapshot serialization, history rehydration, public projection   |
-| [`src/xstate/registry.ts`](src/xstate/registry.ts)     | Reachable child-machine discovery and ID validation              |
-| [`src/xstate/conditions.ts`](src/xstate/conditions.ts) | Pure waiter-condition validation and evaluation                  |
-| [`src/xstate/actors.ts`](src/xstate/actors.ts)         | Actor-source resolution, sentinel detection, error/event helpers |
-| [`src/restate/contracts.ts`](src/restate/contracts.ts) | Pure runtime-contract parsing and public-event classification    |
-| [`src/restate/object.ts`](src/restate/object.ts)       | Virtual-object definition and handler lifecycle                  |
-| [`src/restate/effects.ts`](src/restate/effects.ts)     | Abstract-effect execution, waiter settlement, terminal reporting |
-| [`src/restate/state.ts`](src/restate/state.ts)         | Named accessors for all durable KV state                         |
-| [`src/restate/promise.ts`](src/restate/promise.ts)     | Public Restate-aware `fromPromise` adapter                       |
-| [`src/restate/run-actor.ts`](src/restate/run-actor.ts) | Out-of-band promise execution and error semantics                |
-| [`src/restate/types.ts`](src/restate/types.ts)         | Restate handler, request, option, and child-record types         |
+| Module                                                                   | Responsibility                                                   |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| [`src/index.ts`](src/index.ts)                                           | Public exports                                                   |
+| [`src/xstate/types.ts`](src/xstate/types.ts)                             | Persisted, returned, step, target, and effect types              |
+| [`src/xstate/interpret.ts`](src/xstate/interpret.ts)                     | Pure initial/resume steps and XState-action translation          |
+| [`src/xstate/scope.ts`](src/xstate/scope.ts)                             | Inert and parent-aware XState execution scope                    |
+| [`src/xstate/snapshot.ts`](src/xstate/snapshot.ts)                       | Snapshot serialization, history rehydration, public projection   |
+| [`src/xstate/registry.ts`](src/xstate/registry.ts)                       | Reachable child-machine discovery and ID validation              |
+| [`src/xstate/conditions.ts`](src/xstate/conditions.ts)                   | Pure waiter-condition validation and evaluation                  |
+| [`src/xstate/actors.ts`](src/xstate/actors.ts)                           | Actor-source resolution, sentinel detection, error/event helpers |
+| [`src/restate/contracts.ts`](src/restate/contracts.ts)                   | Pure runtime-contract parsing and public-event classification    |
+| [`src/restate/object.ts`](src/restate/object.ts)                         | Public virtual-object facade                                     |
+| [`src/restate/object/definition.ts`](src/restate/object/definition.ts)   | SDK handler wiring and object-definition composition             |
+| [`src/restate/object/runtime.ts`](src/restate/object/runtime.ts)         | Immutable machine registry, self-reference, and object options   |
+| [`src/restate/object/transitions.ts`](src/restate/object/transitions.ts) | Durable transition loading, computation, and commit pipeline     |
+| [`src/restate/object/handlers.ts`](src/restate/object/handlers.ts)       | Named public and internal endpoint operations                    |
+| [`src/restate/object/actor-state.ts`](src/restate/object/actor-state.ts) | Pure persisted-actor classification                              |
+| [`src/restate/object/validation.ts`](src/restate/object/validation.ts)   | Pure ingress and option validation                               |
+| [`src/restate/object/guards.ts`](src/restate/object/guards.ts)           | Stateful instance-existence and disposal guards                  |
+| [`src/restate/effects.ts`](src/restate/effects.ts)                       | Abstract-effect execution, waiter settlement, terminal reporting |
+| [`src/restate/state.ts`](src/restate/state.ts)                           | Named accessors for all durable KV state                         |
+| [`src/restate/promise.ts`](src/restate/promise.ts)                       | Public Restate-aware `fromPromise` adapter                       |
+| [`src/restate/run-actor.ts`](src/restate/run-actor.ts)                   | Out-of-band promise execution and error semantics                |
+| [`src/restate/types.ts`](src/restate/types.ts)                           | Restate handler, request, option, and child-record types         |
 
 ## Contributor test strategy
 
