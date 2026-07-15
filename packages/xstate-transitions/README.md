@@ -39,21 +39,23 @@ Each machine is a Restate virtual object whose durable state _is_ the machine
 snapshot (persisted history-safely). On top of the pure transition core it
 supports:
 
-- **Promise actors** in three explicit flavors (from
+- **Promise actors** in two flavors (from
   [`src/restate/promise.ts`](src/restate/promise.ts)):
-  - `fromPromise(creator)` — ctx-less; runs inside `ctx.run` for exactly-once
-    durability. Any rejection is terminal and routes to `onError` (fail-fast,
-    like vanilla xstate `fromPromise`).
-  - `fromPromise(creator, { retry })` — as above, but transient rejections are
-    retried by Restate's `ctx.run` (`retry: true` for the default policy, or a
-    `RetryPolicy` to bound attempts/backoff); a `TerminalError` skips retries.
+  - `fromPromise(creator)` — a ctx-less durable promise; runs inside `ctx.run`
+    for exactly-once durability. Fail-fast by default: any rejection is terminal
+    and routes to `onError` (like vanilla xstate `fromPromise`). Pass `{ retry }`
+    to opt into Restate's `ctx.run` retry — `retry: true` for the default policy,
+    or a `RetryPolicy` to bound attempts/backoff; a `TerminalError` always skips
+    retries.
   - `fromHandler(creator)` — the creator receives the Restate `ctx`
     (`ctx.run` / `ctx.date` / `ctx.rand`) and journals its own effects; a
     `TerminalError` routes to `onError`, any other error is retried by Restate.
 
-  `fromPromise` (both flavors) and vanilla xstate actors run inside `ctx.run`, so
-  a side effect executes exactly once and its result is journaled — replay-safe
-  by default. `fromHandler` runs directly (it already owns `ctx`).
+  `fromPromise` and vanilla xstate actors run inside `ctx.run`, so a side effect
+  executes exactly once and its result is journaled — replay-safe by default.
+  Because the object is locked while an actor runs, prefer `fromPromise` with
+  `{ retry }` (or `fromHandler`) over a fail-fast promise for work that can fail
+  transiently. `fromHandler` runs directly (it already owns `ctx`).
 
 - **Delayed transitions** (`after`) and delayed events, with **cancellation**
   (`cancel(id)`), via guarded Restate delayed self-sends.

@@ -383,41 +383,44 @@ snapshot, not every transient microstate visited inside it.
 
 ## Promise actors and external effects
 
-The integration provides three actor flavors. All of them run out-of-band in the
-ingress-private `executeActor` handler and report back to the machine as `onDone`
-/ `onError`. The first two run inside `ctx.run`, so their side effect executes
-exactly once and their result is journaled (replay-safe); they differ only in how
-they treat errors. The third receives the Restate `ctx` and journals its own
-effects.
+The integration provides two actor factories — `fromPromise` (ctx-less) and
+`fromHandler` (ctx-aware) — and keeps vanilla XState `fromPromise` working
+unchanged. All of them run out-of-band in the ingress-private `executeActor`
+handler and report back to the machine as `onDone` / `onError`. `fromPromise`
+and vanilla actors run inside `ctx.run`, so their side effect executes exactly
+once and their result is journaled (replay-safe). `fromHandler` receives the
+Restate `ctx` and journals its own effects.
 
-### Basic `fromPromise` (ctx-less, fail-fast)
+> While an actor runs, the machine's virtual object is **locked** — no event can
+> reach the machine to compensate for a failure until the actor settles. Prefer
+> `fromPromise` with a `{ retry }` policy (or `fromHandler`) for anything that
+> can fail transiently, rather than a fail-fast promise that gives up on the
+> first error.
+
+### `fromPromise` (ctx-less)
+
+The creator receives only `{ input }` and runs inside `ctx.run` for exactly-once
+durability. Retry is **opt-in and off by default** — a bare `fromPromise(creator)`
+is fail-fast: any rejection routes to `onError` (like vanilla xstate
+`fromPromise`, but durable).
 
 ```ts
 import { fromPromise } from "./src";
 
+// Fail-fast: no application-level retry.
 const chargeCard = fromPromise<Receipt, ChargeInput>(async ({ input }) => {
-  // ...no ctx; runs inside ctx.run for exactly-once durability.
   return charge(input);
 });
-```
 
-The creator receives only `{ input }`. Any rejection routes to `onError` — there
-is no application-level retry (like vanilla xstate `fromPromise`, but durable).
-
-### Retryable `fromPromise` (ctx-less, retried)
-
-```ts
-import { fromPromise } from "./src";
-
-// retry: true uses Restate's default policy; an object bounds attempts/backoff.
-const chargeCard = fromPromise<Receipt, ChargeInput>(
+// Opt into retries with { retry }: `true` uses Restate's default policy; an
+// object bounds attempts/backoff. A transient rejection is then retried by
+// ctx.run; a TerminalError still fails without retrying, and exhausting the
+// policy routes to onError.
+const chargeCardRetried = fromPromise<Receipt, ChargeInput>(
   async ({ input }) => charge(input),
   { retry: { maxRetryAttempts: 5, initialRetryInterval: 200 } },
 );
 ```
-
-A transient rejection is retried by Restate's `ctx.run`. Throw a `TerminalError`
-to fail without retrying; exhausting the policy also routes to `onError`.
 
 ### `fromHandler` (ctx-aware)
 
@@ -443,23 +446,26 @@ an external system accepts a request but before its result is durably recorded.
 
 | Actor kind                   | Returns  | Throws `TerminalError` | Throws another error                  |
 | ---------------------------- | -------- | ---------------------- | ------------------------------------- |
-| `fromPromise` (basic)        | `onDone` | `onError`              | `onError` (no retry)                  |
-| `fromPromise` (retry)        | `onDone` | `onError`              | Retried by `ctx.run`; then `onError`  |
+| `fromPromise` (no `retry`)   | `onDone` | `onError`              | `onError` (no retry)                  |
+| `fromPromise` (`{ retry }`)  | `onDone` | `onError`              | Retried by `ctx.run`; then `onError`  |
 | `fromHandler`                | `onDone` | `onError`              | Rethrown; Restate retries the handler |
 | Vanilla XState `fromPromise` | `onDone` | `onError`              | `onError` (no retry)                  |
 
 Use a `TerminalError` for a permanent business or input failure that retrying
-cannot fix. Throw an ordinary error for a transient operational failure only in
-the retryable or `fromHandler` variants.
+cannot fix. Throw an ordinary error for a transient operational failure only
+when you passed `{ retry }` or you are in a `fromHandler`.
 
 ### Vanilla XState `fromPromise`
 
 Ordinary XState promise actors remain supported and receive no Restate context.
 They run through the XState actor lifecycle but still inside `ctx.run`, so their
 result is journaled exactly-once. Any rejection is normalized to `onError` with
-the original `{ name, message }` preserved; it is not retried. This makes vanilla
-actors appropriate for self-contained asynchronous computation; reach for the
-`fromPromise`/`fromHandler` variants when you want retries or the Restate `ctx`.
+the original `{ name, message }` preserved; it is not retried — behaviourally the
+same as a bare `fromPromise`. Because the object is locked while the actor runs,
+prefer this library's `fromPromise` (so you can add `{ retry }`) or `fromHandler`
+over a vanilla actor whenever the work can fail transiently; vanilla actors also
+receive `{ input, signal, self, system, emit }`, but only `input` is meaningful
+here — the rest are no-ops in the stateless-between-requests model.
 
 ### Concurrent actors
 
@@ -775,8 +781,9 @@ concurrency, timers, awakeables, retries, or object-to-object delivery.
 
 Check which factory was used, whether the promise resolves, and whether its
 `onDone`/`onError` transitions exist. An ordinary error is retried (rather than
-sent to `onError`) for a retryable `fromPromise` or a `fromHandler`; basic
-`fromPromise` and vanilla actors instead route any error to `onError`.
+sent to `onError`) for a `fromPromise` with `{ retry }` or a `fromHandler`; a
+`fromPromise` without `{ retry }` and vanilla actors instead route any error to
+`onError`.
 
 ### A named action did nothing
 
@@ -1026,17 +1033,17 @@ started in the inert transition scope.
 
 The pure layer emits `runPromise`, and the Restate layer dispatches the
 ingress-private `executeActor` handler. `runActor` resolves named actor sources
-from machine implementations, then dispatches by kind — one self-contained runner
-each, no shared branching:
+from machine implementations, then dispatches by kind — one runner per kind:
 
-- `promise` (basic) and vanilla actors: run once inside `ctx.run` via a shared
-  `runOnce` wrapper. A rejection is captured as the run's result (not rethrown),
-  so `ctx.run` never retries an application error, while a genuine infrastructure
-  crash is still retried. They differ only in the body: vanilla goes through
-  XState `createActor`/`toPromise`, a basic `fromPromise` calls its creator
-  directly.
-- `retryable`: run inside `ctx.run` with the actor's `RetryPolicy`. A non-terminal
-  rejection is retried; a `TerminalError` or an exhausted policy fails terminally.
+- `promise`: a ctx-less `fromPromise`. Without a `retry` policy it shares a
+  `runOnce` wrapper with vanilla actors — the body runs once inside `ctx.run` and
+  a rejection is captured as the run's result (not rethrown), so `ctx.run` never
+  retries an application error, while a genuine infrastructure crash is still
+  retried. (Vanilla actors reach `runOnce` the same way, differing only in the
+  body: they go through XState `createActor`/`toPromise`, whereas a `fromPromise`
+  calls its creator directly.) With a `retry` policy the body instead runs inside
+  `ctx.run` under that `RetryPolicy`: a non-terminal rejection is retried; a
+  `TerminalError` or an exhausted policy fails terminally.
 - `handler`: run the creator directly with `{ input, ctx }` (no `ctx.run`
   wrapper — that would be illegal nested journaling); convert `TerminalError` to
   an error outcome and rethrow anything else so Restate retries the invocation.
@@ -1230,8 +1237,9 @@ High-value invariants to preserve include:
 - a child terminal event is reported once;
 - concurrent invokes cannot overwrite each other's context updates;
 - subscription is established before an optional triggering event;
-- retryable and `fromHandler` actor errors retry, while basic `fromPromise` and
-  vanilla actor errors reach `onError`; terminal errors always reach `onError`;
+- a `fromPromise` with `{ retry }` and `fromHandler` actor errors retry, while a
+  `fromPromise` without `{ retry }` and vanilla actor errors reach `onError`;
+  terminal errors always reach `onError`;
   and
 - every durable scenario behaves the same under forced replay.
 

@@ -11,7 +11,8 @@
 
 import { it } from "vitest";
 
-import { assign, fromPromise, setup } from "xstate";
+import { assign, setup } from "xstate";
+import { fromPromise } from "../../src";
 import { describeE2E } from "./harness";
 
 /**

@@ -17,7 +17,8 @@
  */
 
 import { it } from "vitest";
-import { fromPromise, setup } from "xstate";
+import { setup } from "xstate";
+import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 

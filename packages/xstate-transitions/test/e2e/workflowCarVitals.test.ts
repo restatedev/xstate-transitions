@@ -10,7 +10,8 @@
  */
 
 import { it } from "vitest";
-import { assign, createMachine, fromPromise, type SnapshotFrom } from "xstate";
+import { assign, createMachine, type SnapshotFrom } from "xstate";
+import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 

@@ -10,6 +10,7 @@
  */
 
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
+import type { NonReducibleUnknown } from "xstate";
 import { fromPromise as xstateFromPromise } from "xstate";
 
 /**
@@ -20,7 +21,7 @@ import { fromPromise as xstateFromPromise } from "xstate";
 export const RESTATE_ACTOR = "restate.actor";
 
 /**
- * Retry policy for a retryable {@link fromPromise}. Structurally a subset of the
+ * Retry policy for a {@link fromPromise} that opts into retries. Structurally a subset of the
  * Restate SDK's `RunOptions`, so it is passed straight through to `ctx.run`.
  * Intervals are milliseconds; omitted fields fall back to Restate's defaults.
  */
@@ -45,7 +46,7 @@ export type FromPromiseOptions = {
   readonly retry?: boolean | RetryPolicy;
 };
 
-/** A ctx-less promise creator (basic / retryable {@link fromPromise}). */
+/** A ctx-less promise creator for {@link fromPromise}. */
 export type PromiseCreator<TOutput, TInput> = (args: {
   readonly input: TInput;
 }) => TOutput | Promise<TOutput>;
@@ -57,26 +58,23 @@ export type HandlerCreator<TOutput, TInput> = (args: {
 }) => TOutput | Promise<TOutput>;
 
 /** The kinds of Restate-managed actor, each run by a dedicated runner. */
-export type RestateActorKind = "promise" | "retryable" | "handler";
+export type RestateActorKind = "promise" | "handler";
 
 /**
  * The runtime tag attached to xstate actor logic so `run-actor.ts` knows how to
  * execute it. A discriminated union — one member per {@link RestateActorKind}:
  *
- * - `promise`   — ctx-less, fail-fast (any rejection is terminal).
- * - `retryable` — ctx-less, retried per `retry` policy.
- * - `handler`   — ctx-aware; receives the Restate `ctx`.
+ * - `promise` — ctx-less. Fail-fast by default (any rejection is terminal and
+ *   routes to `onError`); if it carries a `retry` policy, transient rejections
+ *   are retried via `ctx.run` instead.
+ * - `handler` — ctx-aware; receives the Restate `ctx`.
  */
 export type RestateActor =
   | {
       readonly sentinel: typeof RESTATE_ACTOR;
       readonly kind: "promise";
-      readonly config: (args: { input: unknown }) => unknown;
-    }
-  | {
-      readonly sentinel: typeof RESTATE_ACTOR;
-      readonly kind: "retryable";
-      readonly retry: RetryPolicy;
+      /** Present only when the promise opted into retries; absent = fail-fast. */
+      readonly retry?: RetryPolicy;
       readonly config: (args: { input: unknown }) => unknown;
     }
   | {
@@ -90,7 +88,6 @@ export type RestateActor =
 
 const ACTOR_KINDS: ReadonlySet<RestateActorKind> = new Set([
   "promise",
-  "retryable",
   "handler",
 ]);
 
@@ -131,7 +128,7 @@ const rejectDirectStart = () =>
  * `{ retry: true }` (or a policy) to retry transient rejections via Restate's
  * `ctx.run` retry; throw a `TerminalError` to fail without retrying.
  */
-export function fromPromise<TOutput, TInput = unknown>(
+export function fromPromise<TOutput, TInput = NonReducibleUnknown>(
   creator: PromiseCreator<TOutput, TInput>,
   options?: FromPromiseOptions,
 ) {
@@ -146,7 +143,7 @@ export function fromPromise<TOutput, TInput = unknown>(
   }
   return Object.assign(logic, {
     sentinel: RESTATE_ACTOR,
-    kind: "retryable",
+    kind: "promise",
     retry: retry === true ? {} : retry,
     config: creator,
   });
@@ -162,7 +159,7 @@ export function fromPromise<TOutput, TInput = unknown>(
  * other error propagates so Restate retries the whole invocation under its
  * default policy.
  */
-export function fromHandler<TOutput, TInput = unknown>(
+export function fromHandler<TOutput, TInput = NonReducibleUnknown>(
   creator: HandlerCreator<TOutput, TInput>,
 ) {
   const logic = xstateFromPromise<TOutput, TInput>(rejectDirectStart);

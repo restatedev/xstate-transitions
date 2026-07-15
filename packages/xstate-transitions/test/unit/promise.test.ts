@@ -45,26 +45,31 @@ describe("isRestateActor", () => {
 });
 
 describe("actor kinds", () => {
-  it("fromPromise defaults to a fail-fast 'promise' actor", () => {
-    expect(tagOf(fromPromise(async () => 1)).kind).toBe("promise");
-    expect(tagOf(fromPromise(async () => 1, { retry: false })).kind).toBe(
-      "promise",
-    );
+  it("fromPromise is a 'promise' actor; without retry it is fail-fast (no policy)", () => {
+    for (const actor of [
+      tagOf(fromPromise(async () => 1)),
+      tagOf(fromPromise(async () => 1, { retry: false })),
+    ]) {
+      expect(actor.kind).toBe("promise");
+      if (actor.kind === "promise") {
+        expect(actor.retry).toBeUndefined();
+      }
+    }
   });
 
-  it("fromPromise with retry: true is a 'retryable' actor using the default policy", () => {
+  it("fromPromise with retry: true is a 'promise' actor carrying the default policy", () => {
     const actor = tagOf(fromPromise(async () => 1, { retry: true }));
-    expect(actor.kind).toBe("retryable");
-    if (actor.kind === "retryable") {
+    expect(actor.kind).toBe("promise");
+    if (actor.kind === "promise") {
       expect(actor.retry).toEqual({});
     }
   });
 
-  it("fromPromise with a policy is a 'retryable' actor carrying it verbatim", () => {
+  it("fromPromise with a policy is a 'promise' actor carrying it verbatim", () => {
     const policy = { maxRetryAttempts: 3, initialRetryInterval: 100 };
     const actor = tagOf(fromPromise(async () => 1, { retry: policy }));
-    expect(actor.kind).toBe("retryable");
-    if (actor.kind === "retryable") {
+    expect(actor.kind).toBe("promise");
+    if (actor.kind === "promise") {
       expect(actor.retry).toEqual(policy);
     }
   });
