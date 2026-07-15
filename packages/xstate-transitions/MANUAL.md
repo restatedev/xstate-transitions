@@ -313,6 +313,47 @@ object exposed through ingress. When present:
   awakeable is registered; and
 - validation failures are terminal status 400 errors.
 
+### Schemas are derived from the machine by default
+
+You rarely need to write a `contract` at all. XState v6 keeps `schemas` on the
+machine at runtime, and each entry is a Standard Schema — the same interface
+`contract` accepts. So if a machine already declares real validators, the object
+uses them automatically:
+
+```ts
+const machine = setup({
+  schemas: {
+    input: z.object({ accountId: z.string().uuid() }),
+    events: {
+      DEPOSIT: z.object({ amount: z.coerce.number().positive() }),
+      CLOSE: z.object({}),
+    },
+  },
+}).createMachine({
+  // ...
+});
+
+createMachineObject("accounts", machine); // serdes derived — no contract needed
+```
+
+Resolution is per boundary: `contract.input ?? machine.schemas.input` drives
+`create`, and `contract.event` (or an adapter over `machine.schemas.events`)
+drives `send` and `waitFor.event`. An explicit `contract` always wins, which is
+useful when the transport shape must differ from the machine's own types.
+
+Two rules keep this safe:
+
+- **`types<T>()` is type-only.** Its validator accepts everything, so the
+  integration treats it as "no runtime validator" and leaves that boundary
+  unvalidated (exactly as before). Use a real schema library (Zod, Valibot,
+  ArkType, …) to get runtime validation and coercion.
+- **`schemas.events` becomes one discriminated schema.** XState stores a payload
+  schema per event type, without the `type` field. The derived adapter checks
+  that `type` names a declared event, validates the payload against that event's
+  schema, and reattaches `type` to the (possibly coerced) result. An unknown
+  event type is rejected; if every declared event is type-only, `send` stays
+  permissive.
+
 Schemas may transform input, and the machine receives the parsed output. Keep
 validation synchronous: Restate handler deserialization is synchronous. Also
 reserve the `xstate.*` event namespace for the integration; the public `send`

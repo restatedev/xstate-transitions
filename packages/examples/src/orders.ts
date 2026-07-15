@@ -24,9 +24,11 @@
  *   - a `final` state with `tags` and `output`, which `waitFor("hasTag:ready")`
  *     and the returned snapshot expose.
  *
- * TIP: types vanish at runtime. For a trusted ingress boundary, attach a runtime
- * `contract: { input, event }` (any Standard Schema, e.g. Zod) when you create
- * the object — see MANUAL.md ("Runtime ingress contracts").
+ * TIP: `types<T>()` vanishes at runtime. Swap it for a real Standard Schema
+ * (Zod, Valibot, ArkType, …) in `schemas` and `createMachineObject` derives the
+ * ingress serdes automatically — no `contract` needed — validating and coercing
+ * `create`/`send`. Pass an explicit `contract` only to override. See MANUAL.md
+ * ("Runtime ingress contracts").
  */
 
 import * as restate from "@restatedev/restate-sdk";

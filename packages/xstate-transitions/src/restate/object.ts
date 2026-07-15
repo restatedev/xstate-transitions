@@ -31,6 +31,7 @@ import type {
   StoredState,
 } from "../xstate/types";
 import { parseContract, publicEventProblem } from "./contracts";
+import { deriveEventSchema, deriveInputSchema } from "./schemas";
 import {
   executeEffects,
   maybeScheduleCleanup,
@@ -124,10 +125,15 @@ export function createMachineObject<
   const { finalStateTTL, contract, ...objectOptions } = options ?? {};
   validateFinalStateTTL(finalStateTTL);
 
-  const inputSerde = selectSerde(contract?.input);
-  const eventSerde = selectSerde(contract?.event);
+  // Default the ingress serdes to the machine's own v6 `schemas`; an explicit
+  // `contract` overrides them per boundary (see ./schemas).
+  const inputSchema = contract?.input ?? deriveInputSchema(machine);
+  const eventSchema = contract?.event ?? deriveEventSchema(machine);
+
+  const inputSerde = selectSerde(inputSchema);
+  const eventSerde = selectSerde(eventSchema);
   const runtime = new MachineRuntime(name, machine, finalStateTTL);
-  const handlers = new MachineHandlers(runtime, contract?.event);
+  const handlers = new MachineHandlers(runtime, eventSchema);
 
   return restate.object({
     name,
