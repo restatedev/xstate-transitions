@@ -115,7 +115,9 @@ describe("runActor — fromPromise (ctx-less, wrapped in ctx.run)", () => {
       .fn<(args: { input: unknown }) => Promise<string>>()
       .mockRejectedValue(new Error("always"));
     const machine = setup({
-      actors: { work: fromPromise(creator, { retry: { maxRetryAttempts: 2 } }) },
+      actors: {
+        work: fromPromise(creator, { retry: { maxRetryAttempts: 2 } }),
+      },
     }).createMachine({ id: "machine", invoke: { id: "work", src: "work" } });
     const { ctx, runCalls } = fakeContext();
 
@@ -197,9 +199,9 @@ describe("runActor — fromHandler (ctx-aware)", () => {
     }).createMachine({ id: "machine", invoke: { id: "work", src: "work" } });
     const { ctx } = fakeContext();
 
-    await expect(
-      runActor(machine, invokedParams(machine), ctx),
-    ).rejects.toBe(transient);
+    await expect(runActor(machine, invokedParams(machine), ctx)).rejects.toBe(
+      transient,
+    );
   });
 });
 

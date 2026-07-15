@@ -90,22 +90,18 @@ describeE2E("A fromHandler state machine", (createActor) => {
     },
   );
 
-  it(
-    "routes a TerminalError to onError",
-    { timeout: 20_000 },
-    async () => {
-      const sendEmail = vi
-        .fn<(customer: string) => Promise<void>>()
-        .mockRejectedValueOnce(new TerminalError("Fail to send email"));
-      using actor = await createActor<{ status?: string } | undefined>({
-        machine: machineFactory(sendEmail),
-        input: { customer: "bob@mop.com" },
-      });
-      await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(1));
-      await eventually(() => actor.snapshot()).toMatchObject({
-        status: "done",
-        value: "Failed",
-      });
-    },
-  );
+  it("routes a TerminalError to onError", { timeout: 20_000 }, async () => {
+    const sendEmail = vi
+      .fn<(customer: string) => Promise<void>>()
+      .mockRejectedValueOnce(new TerminalError("Fail to send email"));
+    using actor = await createActor<{ status?: string } | undefined>({
+      machine: machineFactory(sendEmail),
+      input: { customer: "bob@mop.com" },
+    });
+    await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(1));
+    await eventually(() => actor.snapshot()).toMatchObject({
+      status: "done",
+      value: "Failed",
+    });
+  });
 });

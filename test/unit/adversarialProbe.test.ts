@@ -227,7 +227,10 @@ describe("temporary adversarial probes", () => {
     const spawn = actions.find(
       (candidate) => candidate.type === "xstate.spawnChild",
     ) as any;
-    const outcome = await runActor(machine, spawn.params, {} as any);
+    // Vanilla actors now run inside ctx.run, so provide a minimal fake that just
+    // executes the action.
+    const fakeCtx = { run: (_name: string, action: () => unknown) => action() };
+    const outcome = await runActor(machine, spawn.params, fakeCtx as any);
     expect(outcome).toMatchObject({
       error: { name: "Error", message: "MATCH_ME" },
     });

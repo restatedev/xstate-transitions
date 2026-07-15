@@ -13,14 +13,17 @@ export type ActorOutcome =
   | { readonly status: "done"; readonly output?: unknown }
   | { readonly status: "error"; readonly error: NormalizedError };
 
-type FailFastActor = Extract<RestateActor, { kind: "promise" }>;
 type RetryableActor = Extract<RestateActor, { kind: "retryable" }>;
 type HandlerActor = Extract<RestateActor, { kind: "handler" }>;
 
 /**
- * Resolve an invoked/spawned actor and dispatch to the runner for its kind. Each
- * runner is self-contained; this function only picks one. The exclusive
- * actorDone/actorError handlers translate the outcome to XState's protocol.
+ * Resolve an invoked/spawned actor and dispatch to the runner for its kind. The
+ * exclusive actorDone/actorError handlers translate the outcome to XState's
+ * protocol.
+ *
+ * Vanilla xstate logic and a basic `fromPromise` share the same `runOnce`
+ * wrapper — they differ only in how their body is invoked (the xstate actor
+ * lifecycle vs. calling our `config` directly).
  */
 export async function runActor(
   machine: AnyStateMachine,
@@ -33,59 +36,64 @@ export async function runActor(
       : params.src;
 
   if (!isRestateActor(logic)) {
-    return runVanillaActor(logic, params);
+    return runOnce(ctx, params, () => runVanilla(logic, params));
   }
   switch (logic.kind) {
     case "promise":
-      return runFailFastActor(logic, params, ctx);
+      return runOnce(ctx, params, () => logic.config({ input: params.input }));
     case "retryable":
-      return runRetryableActor(logic, params, ctx);
+      return runRetryable(ctx, params, logic);
     case "handler":
-      return runHandlerActor(logic, params, ctx);
+      return runHandler(ctx, params, logic);
     default:
       return assertNever(logic);
   }
 }
 
 /**
- * Basic `fromPromise`: the ctx-less creator runs once inside `ctx.run` for
- * exactly-once durability. Any rejection is made terminal so `ctx.run` never
- * retries an application error — it routes straight to `onError`. (A genuine
- * infrastructure crash is still retried by Restate, since it is not an error
- * thrown by the body.)
+ * Run a ctx-less actor `body` exactly once inside `ctx.run`, journaling its
+ * outcome for replay-safety. A rejection is captured as the run's result rather
+ * than rethrown, so `ctx.run` never retries an application error — it settles to
+ * `onError` with the original error preserved. A genuine infrastructure crash is
+ * still retried, since it is not an error the body reported.
+ *
+ * Shared by vanilla xstate actors and basic `fromPromise`, which differ only in
+ * `body`.
  */
-async function runFailFastActor(
-  logic: FailFastActor,
-  params: SpawnParams,
+function runOnce(
   ctx: ObjectSharedContext,
+  params: SpawnParams,
+  body: () => unknown,
 ): Promise<ActorOutcome> {
-  try {
-    const output = await ctx.run(`actor:${params.id}`, async () => {
-      try {
-        return await logic.config({ input: params.input });
-      } catch (err) {
-        throw asTerminalError(err);
-      }
-    });
-    return { status: "done", output };
-  } catch (err) {
-    if (err instanceof restate.TerminalError) {
+  return ctx.run(`actor:${params.id}`, async (): Promise<ActorOutcome> => {
+    try {
+      return { status: "done", output: await body() };
+    } catch (err) {
       return { status: "error", error: normalizeError(err) };
     }
-    throw err;
-  }
+  });
+}
+
+/** Run vanilla xstate actor logic through the xstate actor lifecycle. */
+function runVanilla(logic: unknown, params: SpawnParams): Promise<unknown> {
+  const actor = createActor(logic as AnyActorLogic, {
+    id: params.id,
+    input: params.input,
+  });
+  return toPromise(actor.start());
 }
 
 /**
  * Retryable `fromPromise`: the ctx-less creator runs inside `ctx.run` with a
  * retry policy. A transient rejection is retried by Restate; a `TerminalError`
  * bypasses retries, and exhausting the policy fails terminally. Either way
- * `ctx.run` surfaces only a `TerminalError`, which routes to `onError`.
+ * `ctx.run` surfaces only a `TerminalError`, which routes to `onError`; anything
+ * else is a Restate control signal we must rethrow.
  */
-async function runRetryableActor(
-  logic: RetryableActor,
-  params: SpawnParams,
+async function runRetryable(
   ctx: ObjectSharedContext,
+  params: SpawnParams,
+  logic: RetryableActor,
 ): Promise<ActorOutcome> {
   try {
     const output = await ctx.run(
@@ -108,10 +116,10 @@ async function runRetryableActor(
  * journaling). A `TerminalError` routes to `onError`; anything else propagates so
  * Restate retries the whole invocation under its default policy.
  */
-async function runHandlerActor(
-  logic: HandlerActor,
-  params: SpawnParams,
+async function runHandler(
   ctx: ObjectSharedContext,
+  params: SpawnParams,
+  logic: HandlerActor,
 ): Promise<ActorOutcome> {
   try {
     const output = await logic.config({ input: params.input, ctx });
@@ -122,33 +130,6 @@ async function runHandlerActor(
     }
     throw err;
   }
-}
-
-/**
- * Vanilla xstate actor logic (child promise actors, fromTransition, etc.). Runs
- * once via createActor+toPromise; any error becomes an actor error routed to
- * `onError`.
- */
-async function runVanillaActor(
-  logic: unknown,
-  params: SpawnParams,
-): Promise<ActorOutcome> {
-  try {
-    const actor = createActor(logic as AnyActorLogic, {
-      id: params.id,
-      input: params.input,
-    });
-    const output = await toPromise(actor.start());
-    return { status: "done", output };
-  } catch (err) {
-    return { status: "error", error: normalizeError(err) };
-  }
-}
-
-function asTerminalError(err: unknown): restate.TerminalError {
-  return err instanceof restate.TerminalError
-    ? err
-    : new restate.TerminalError(err instanceof Error ? err.message : String(err));
 }
 
 function assertNever(value: never): never {
