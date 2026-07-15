@@ -1,0 +1,10 @@
+packages:
+  - "packages/*"
+
+# Shared dependency versions referenced as `catalog:` in each package.
+# xstate is pinned exactly: the integration depends on xstate internals.
+catalog:
+  "@restatedev/restate-sdk": ^1.16.1
+  "@restatedev/restate-sdk-clients": 1.16.1
+  "@restatedev/restate-sdk-testcontainers": 1.16.1
+  xstate: 5.32.4

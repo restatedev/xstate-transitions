@@ -1,6 +1,6 @@
 import * as restate from "@restatedev/restate-sdk";
 import { assign, fromPromise, setup } from "xstate";
-import { createMachineObject } from "./index";
+import { createMachineObject } from "@restatedev/xstate-transitions";
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {

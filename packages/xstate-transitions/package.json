@@ -1,0 +1,49 @@
+{
+  "name": "@restatedev/xstate-transitions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Run XState v5 pure-transition machines as durable Restate virtual objects",
+  "license": "MIT",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md",
+    "MANUAL.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest --run",
+    "test:unit": "vitest --run test/unit",
+    "test:e2e": "vitest --run test/e2e",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "peerDependencies": {
+    "@restatedev/restate-sdk": "catalog:",
+    "xstate": "catalog:"
+  },
+  "devDependencies": {
+    "@restatedev/restate-sdk-clients": "catalog:",
+    "@restatedev/restate-sdk-testcontainers": "catalog:"
+  }
+}
