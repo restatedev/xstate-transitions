@@ -1,8 +1,12 @@
 import type { StandardSchema, StandardSchemaIssue } from "./types";
 
 export type ContractParseResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; kind: "invalid" | "async"; message: string };
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly kind: "invalid" | "async";
+      readonly message: string;
+    };
 
 /** Run a Standard Schema contract without coupling validation to Restate. */
 export function parseContract<T>(

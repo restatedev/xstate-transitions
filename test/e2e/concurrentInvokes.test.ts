@@ -1,9 +1,7 @@
 /*
- * Phase 0 — behaviour-pinning test.
- *
  * A single macrostep that enters two invokes (here, two parallel regions)
  * dispatches two `xstate.spawnChild` actions that run concurrently through the
- * shared `_execute` handler. Both done events must feed back and their context
+ * shared `executeActor` handler. Both done events must feed back and their context
  * assignments must merge. This locks the shared-handler fan-out + merge.
  */
 

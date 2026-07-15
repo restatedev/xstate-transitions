@@ -33,10 +33,17 @@ Each machine is a Restate virtual object whose durable state _is_ the machine
 snapshot (persisted history-safely). On top of the pure transition core it
 supports:
 
-- **Promise actors** with an injected Restate `ctx` (`fromPromise` from
-  [`src/restate/promise.ts`](src/restate/promise.ts) → `ctx.run` / `ctx.date` /
-  `ctx.rand`);
-  transient errors are retried by Restate, `TerminalError` routes to `onError`.
+- **Promise actors** in three explicit flavors (from
+  [`src/restate/promise.ts`](src/restate/promise.ts)):
+  - `fromPromise(creator)` — ctx-less; runs inside `ctx.run` for exactly-once
+    durability. Any rejection is terminal and routes to `onError` (fail-fast,
+    like vanilla xstate `fromPromise`).
+  - `fromPromise(creator, { retry })` — as above, but transient rejections are
+    retried by Restate's `ctx.run` (`retry: true` for the default policy, or a
+    `RetryPolicy` to bound attempts/backoff); a `TerminalError` skips retries.
+  - `fromHandler(creator)` — the creator receives the Restate `ctx`
+    (`ctx.run` / `ctx.date` / `ctx.rand`) and journals its own effects; a
+    `TerminalError` routes to `onError`, any other error is retried by Restate.
 - **Delayed transitions** (`after`) and delayed events, with **cancellation**
   (`cancel(id)`), via guarded Restate delayed self-sends.
 - **`waitFor` / `subscribe`** on `done` / `hasTag:*` conditions, backed by

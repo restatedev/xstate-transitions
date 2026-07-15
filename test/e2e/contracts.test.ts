@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { assign, setup } from "xstate";
-import type { StandardSchema } from "../src";
+import type { StandardSchema } from "../../src";
 import { describeE2E } from "./harness";
 
 interface CounterInput {

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { assign, setup } from "xstate";
-import { fromPromise } from "../src";
+import { fromPromise } from "../../src";
 import { wait } from "./eventually";
 import { describeE2E } from "./harness";
 

@@ -1,18 +1,11 @@
 /*
- * GAP TEST (scaffold, todo) — BLOCKED BY: Phase 6 "waitFor / subscribe + tags".
- *
- * Target behaviour: server-side conditions backed by Restate awakeables.
+ * Server-side conditions backed by Restate awakeables:
  *  - waitFor("hasTag:WaitForInput") resolves on the start node's tag;
  *  - waitFor("done", startEvent) sends an event and awaits final -> output.decision === "Approved";
  *  - waitFor("hasTag:EvaluateDecision") rejects "State machine completed without the
  *    condition being met" (that state is transited-through instantaneously, never observed
  *    as a settled macrostep);
  *  - waitFor("hasTag:End") resolves on the final state.
- *
- * Un-skip when: core.ts gains `waitFor` (shared, awakeable) + `subscribe` handlers,
- * a `subscriptions` KV, snapshot tags exposure, and the runner grows a
- * waitFor(condition, event?) method. The promise creators here use only { input }
- * so vanilla fromPromise is fine.
  */
 
 import { expect, it } from "vitest";

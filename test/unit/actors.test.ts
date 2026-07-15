@@ -5,11 +5,9 @@ import {
   setup,
   fromPromise as xstateFromPromise,
 } from "xstate";
-import { fromPromise as restateFromPromise } from "../../src/restate/promise";
 import {
   createDoneActorEvent,
   createErrorActorEvent,
-  isRestatePromiseActor,
   normalizeError,
   resolveReferencedActor,
 } from "../../src/xstate/actors";
@@ -33,17 +31,6 @@ describe("resolveReferencedActor", () => {
     ) as { params: { src: string } };
     expect(spawn.params.src).toMatch(/^xstate\.invoke\./);
     expect(resolveReferencedActor(parent, spawn.params.src)).toBe(child);
-  });
-});
-
-describe("isRestatePromiseActor", () => {
-  it("is true for a Restate-aware fromPromise", () => {
-    expect(isRestatePromiseActor(restateFromPromise(async () => 1))).toBe(true);
-  });
-  it("is false for vanilla fromPromise and other values", () => {
-    expect(isRestatePromiseActor(xstateFromPromise(async () => 1))).toBe(false);
-    expect(isRestatePromiseActor(createMachine({ id: "m" }))).toBe(false);
-    expect(isRestatePromiseActor(null)).toBe(false);
   });
 });
 

@@ -16,8 +16,8 @@ import {
 } from "@restatedev/restate-sdk-testcontainers";
 import type { AnyStateMachine } from "xstate";
 import { type AnyEventObject } from "xstate";
-import type { Condition, MachineVirtualObject } from "../src";
-import { createMachineObject, type MachineObjectOptions } from "../src";
+import type { Condition, MachineVirtualObject } from "../../src";
+import { createMachineObject, type MachineObjectOptions } from "../../src";
 
 export type RunMachineOptions = {
   machine: AnyStateMachine;

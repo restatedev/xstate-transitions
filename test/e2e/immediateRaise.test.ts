@@ -1,12 +1,8 @@
 /*
- * Phase 0 — behaviour-pinning test.
- *
  * A non-delayed `raise` is drained INSIDE transition()'s macrostep (resolveRaise
- * enqueues it on the internal queue), so by the time core.ts persists the
- * snapshot the machine has already advanced. This means dispatchAction's
- * "do nothing for a zero-delay raise" branch is correct, not a bug. This test
- * locks that: a single send that raises an internal event must settle past both
- * transitions.
+ * enqueues it on the internal queue), so the snapshot is already advanced when
+ * the object persists it. No Restate delivery is needed: one public event must
+ * settle past both transitions.
  */
 
 import { it } from "vitest";

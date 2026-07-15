@@ -1,6 +1,4 @@
 /*
- * Phase 1 — error propagation normalization.
- *
  * A thrown Error is normalized to a serializable { name, message } before it
  * crosses the JSON boundary, so an onError transition guarded on
  * event.error.message can select a branch. Without normalization the error

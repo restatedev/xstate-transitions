@@ -1,10 +1,8 @@
 /*
- * Phase 1 — history-safe persistence (integration).
- *
  * Drives a machine with a shallow history state through the real Restate object
- * (create/send/snapshot). Because core.ts now persists historyValue as node ids
- * and rehydrates them, RESUME restores the remembered sub-state across the
- * stateless round-trip.
+ * (create/send/snapshot). The snapshot layer persists historyValue as node IDs
+ * and rehydrates them, so RESUME restores the remembered sub-state across the
+ * durable round-trip.
  */
 
 import { expect, it } from "vitest";

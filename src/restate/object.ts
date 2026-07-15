@@ -21,12 +21,9 @@ import type {
 } from "../xstate/types";
 import { parseContract, publicEventProblem } from "./contracts";
 import {
-  client,
   executeEffects,
   maybeScheduleCleanup,
   reportTerminal,
-  selfDef,
-  sendClient,
   settleSubscriptions,
 } from "./effects";
 import { runActor } from "./run-actor";
@@ -57,7 +54,6 @@ import type {
   ExecuteRequest,
   HandlerContext,
   InitRequest,
-  MachineContract,
   MachineDefinition,
   MachineObjectOptions,
   MachineVirtualObject,
@@ -70,11 +66,11 @@ import type {
 const INTERNAL_HANDLER_METADATA = {
   "restate.xstate.internal": "true",
 } as const;
-const PRIVATE_HANDLER = {
+const INTERNAL_HANDLER_OPTIONS = {
   ingressPrivate: true,
   metadata: INTERNAL_HANDLER_METADATA,
 } as const;
-const PRIVATE_LAZY_HANDLER = {
+const INTERNAL_LAZY_HANDLER_OPTIONS = {
   ingressPrivate: true,
   enableLazyState: true,
   metadata: INTERNAL_HANDLER_METADATA,
@@ -115,16 +111,10 @@ export function createMachineObject<
   const { finalStateTTL, contract, ...objectOptions } = options ?? {};
   validateFinalStateTTL(finalStateTTL);
 
-  const inputSerde: restate.Serde<InputFrom<M>> =
-    contract?.input === undefined
-      ? (restate.serde.json as restate.Serde<InputFrom<M>>)
-      : restate.serde.schema(contract.input);
-  const eventSerde: restate.Serde<EventFrom<M>> =
-    contract?.event === undefined
-      ? (restate.serde.json as restate.Serde<EventFrom<M>>)
-      : restate.serde.schema(contract.event);
+  const inputSerde = selectSerde(contract?.input);
+  const eventSerde = selectSerde(contract?.event);
   const runtime = new MachineRuntime(name, machine, finalStateTTL);
-  const handlers = new MachineHandlers(runtime, contract);
+  const handlers = new MachineHandlers(runtime, contract?.event);
 
   return restate.object({
     name,
@@ -140,6 +130,8 @@ export function createMachineObject<
        * the same key deliberately replaces the previous instance and clears
        * its runtime bookkeeping before starting from the initial state.
        */
+      // The SDK conditionally removes a void input from the returned handler
+      // type; the public machine surface intentionally preserves InputFrom<M>.
       create: restate.createObjectHandler(
         {
           input: inputSerde,
@@ -228,7 +220,7 @@ export function createMachineObject<
        */
       initChild: restate.createObjectHandler(
         {
-          ...PRIVATE_HANDLER,
+          ...INTERNAL_HANDLER_OPTIONS,
           description:
             "Initializes a child machine instance and records its parent identity.",
         },
@@ -246,7 +238,7 @@ export function createMachineObject<
        */
       deliverEvent: restate.createObjectHandler(
         {
-          ...PRIVATE_HANDLER,
+          ...INTERNAL_HANDLER_OPTIONS,
           description:
             "Applies a trusted internal or XState lifecycle event to an instance.",
         },
@@ -263,7 +255,7 @@ export function createMachineObject<
        */
       actorDone: restate.createObjectHandler(
         {
-          ...PRIVATE_HANDLER,
+          ...INTERNAL_HANDLER_OPTIONS,
           description:
             "Delivers a successful result from the current promise actor execution.",
         },
@@ -280,7 +272,7 @@ export function createMachineObject<
        */
       actorError: restate.createObjectHandler(
         {
-          ...PRIVATE_HANDLER,
+          ...INTERNAL_HANDLER_OPTIONS,
           description:
             "Delivers a normalized error from the current promise actor execution.",
         },
@@ -297,7 +289,7 @@ export function createMachineObject<
        */
       deliverScheduled: restate.createObjectHandler(
         {
-          ...PRIVATE_HANDLER,
+          ...INTERNAL_HANDLER_OPTIONS,
           description:
             "Delivers a current delayed event and ignores cancelled or stale schedules.",
         },
@@ -315,7 +307,7 @@ export function createMachineObject<
        */
       executeActor: restate.createObjectSharedHandler(
         {
-          ...PRIVATE_LAZY_HANDLER,
+          ...INTERNAL_LAZY_HANDLER_OPTIONS,
           description:
             "Runs a promise actor and reports its generation-scoped outcome.",
         },
@@ -332,7 +324,7 @@ export function createMachineObject<
        */
       cleanupState: restate.createObjectHandler(
         {
-          ...PRIVATE_HANDLER,
+          ...INTERNAL_HANDLER_OPTIONS,
           description:
             "Clears a completed instance after its final-state retention period.",
         },
@@ -353,7 +345,7 @@ export class MachineRuntime<M extends AnyStateMachine = AnyStateMachine> {
   constructor(name: string, rootMachine: M, finalStateTTL: number | undefined) {
     this.rootMachine = rootMachine;
     this.registry = buildRegistry(rootMachine);
-    this.self = selfDef(name);
+    this.self = { name };
     this.finalStateTTL = finalStateTTL;
   }
 
@@ -375,18 +367,11 @@ export class MachineRuntime<M extends AnyStateMachine = AnyStateMachine> {
 class MachineHandlers<M extends AnyStateMachine> {
   constructor(
     private readonly runtime: MachineRuntime<M>,
-    private readonly contract: MachineContract<M> | undefined,
+    private readonly eventContract: StandardSchema<EventFrom<M>> | undefined,
   ) {}
 
   create(context: restate.ObjectContext, input: InputFrom<M>): Promise<void> {
     return initializeRoot(this.runtime, context, input);
-  }
-
-  initChild(
-    context: restate.ObjectContext,
-    request: InitRequest,
-  ): Promise<void> {
-    return initializeChild(this.runtime, context, request);
   }
 
   async send(
@@ -399,97 +384,12 @@ class MachineHandlers<M extends AnyStateMachine> {
     await applyEvent(this.runtime, context, event);
   }
 
-  deliverEvent(
-    context: restate.ObjectContext,
-    event: AnyEventObject,
-  ): Promise<void> {
-    return applyEvent(this.runtime, context, event);
-  }
-
-  async actorDone(
-    context: restate.ObjectContext,
-    request: ActorDoneRequest,
-  ): Promise<void> {
-    const isCurrent = await consumeActorExecution(
-      context,
-      request.actorId,
-      request.executionId,
-    );
-    if (!isCurrent) return;
-
-    await applyEvent(
-      this.runtime,
-      context,
-      createDoneActorEvent(request.actorId, request.output),
-    );
-  }
-
-  async actorError(
-    context: restate.ObjectContext,
-    request: ActorErrorRequest,
-  ): Promise<void> {
-    const isCurrent = await consumeActorExecution(
-      context,
-      request.actorId,
-      request.executionId,
-    );
-    if (!isCurrent) return;
-
-    await applyEvent(
-      this.runtime,
-      context,
-      createNormalizedErrorActorEvent(request.actorId, request.error),
-    );
-  }
-
-  async deliverScheduled(
-    context: restate.ObjectContext,
-    request: ScheduledEvent,
-  ): Promise<void> {
-    const scheduled = await getScheduled(context);
-    const entry = scheduled[request.sendId];
-    if (!entry || entry.uuid !== request.uuid) return;
-
-    delete scheduled[request.sendId];
-    setScheduled(context, scheduled);
-
-    if (entry.targetKey === context.key) {
-      await applyEvent(this.runtime, context, entry.event);
-    } else {
-      sendClient(context, this.runtime.self, entry.targetKey).deliverEvent(
-        entry.event,
-      );
-    }
-  }
-
-  async executeActor(
-    context: restate.ObjectSharedContext,
-    request: ExecuteRequest,
-  ): Promise<void> {
-    const machine = this.runtime.resolveMachine(await getMachineId(context));
-    const outcome = await runActor(machine, request.params, context);
-    const target = sendClient(context, this.runtime.self, context.key);
-
-    if (outcome.status === "done") {
-      target.actorDone({
-        actorId: request.params.id,
-        executionId: request.executionId,
-        output: outcome.output,
-      });
-    } else {
-      target.actorError({
-        actorId: request.params.id,
-        executionId: request.executionId,
-        error: outcome.error,
-      });
-    }
-  }
-
   async snapshot(context: restate.ObjectContext): Promise<ReturnedSnapshot> {
     await validateNotDisposed(context);
     const stored = await getRequiredState(context);
     const machine = this.runtime.resolveMachine(await getMachineId(context));
-    return toReturnedSnapshot(fromStored(machine, stored));
+    const snapshot = fromStored(machine, stored);
+    return toReturnedSnapshot(snapshot);
   }
 
   async subscribe(
@@ -501,7 +401,8 @@ class MachineHandlers<M extends AnyStateMachine> {
     validateCondition(request.condition);
 
     const machine = this.runtime.resolveMachine(await getMachineId(context));
-    const returned = toReturnedSnapshot(fromStored(machine, stored));
+    const snapshot = fromStored(machine, stored);
+    const returned = toReturnedSnapshot(snapshot);
     const outcome = evaluateCondition(returned, request.condition);
 
     if (outcome.status === "resolve") {
@@ -515,7 +416,7 @@ class MachineHandlers<M extends AnyStateMachine> {
 
     const subscriptions = await getSubscriptions(context);
     const existing = subscriptions[request.condition];
-    if (existing) {
+    if (existing !== undefined) {
       existing.awakeables.push(request.awakeableId);
     } else {
       subscriptions[request.condition] = {
@@ -536,16 +437,24 @@ class MachineHandlers<M extends AnyStateMachine> {
     const event =
       request.event === undefined
         ? undefined
-        : parsePublicEvent(this.contract?.event, request.event);
+        : parsePublicEvent(this.eventContract, request.event);
     const { id, promise } = context.awakeable<ReturnedSnapshot>();
 
-    await client(context, this.runtime.self, context.key).subscribe({
+    const subscriber = context.objectClient<MachineVirtualObject>(
+      this.runtime.self,
+      context.key,
+    );
+    await subscriber.subscribe({
       condition: request.condition,
       awakeableId: id,
     });
 
     if (event !== undefined) {
-      sendClient(context, this.runtime.self, context.key).deliverEvent(event);
+      const sender = context.objectSendClient<MachineVirtualObject>(
+        this.runtime.self,
+        context.key,
+      );
+      sender.deliverEvent(event);
     }
 
     try {
@@ -556,6 +465,102 @@ class MachineHandlers<M extends AnyStateMachine> {
       if (!(error instanceof restate.TerminalError)) throw error;
       if (error.code !== 500) throw error;
       throw new restate.TerminalError(error.message, { errorCode: 412 });
+    }
+  }
+
+  initChild(
+    context: restate.ObjectContext,
+    request: InitRequest,
+  ): Promise<void> {
+    return initializeChild(this.runtime, context, request);
+  }
+
+  deliverEvent(
+    context: restate.ObjectContext,
+    event: AnyEventObject,
+  ): Promise<void> {
+    return applyEvent(this.runtime, context, event);
+  }
+
+  async actorDone(
+    context: restate.ObjectContext,
+    request: ActorDoneRequest,
+  ): Promise<void> {
+    const isCurrent = await consumeActorExecution(
+      context,
+      request.actorId,
+      request.executionId,
+    );
+    if (!isCurrent) return;
+
+    const event = createDoneActorEvent(request.actorId, request.output);
+    await applyEvent(this.runtime, context, event);
+  }
+
+  async actorError(
+    context: restate.ObjectContext,
+    request: ActorErrorRequest,
+  ): Promise<void> {
+    const isCurrent = await consumeActorExecution(
+      context,
+      request.actorId,
+      request.executionId,
+    );
+    if (!isCurrent) return;
+
+    const event = createNormalizedErrorActorEvent(
+      request.actorId,
+      request.error,
+    );
+    await applyEvent(this.runtime, context, event);
+  }
+
+  async deliverScheduled(
+    context: restate.ObjectContext,
+    request: ScheduledEvent,
+  ): Promise<void> {
+    const scheduled = await getScheduled(context);
+    const entry = scheduled[request.sendId];
+    if (entry === undefined || entry.uuid !== request.uuid) return;
+
+    delete scheduled[request.sendId];
+    setScheduled(context, scheduled);
+
+    if (entry.targetKey === context.key) {
+      await applyEvent(this.runtime, context, entry.event);
+      return;
+    }
+
+    const sender = context.objectSendClient<MachineVirtualObject>(
+      this.runtime.self,
+      entry.targetKey,
+    );
+    sender.deliverEvent(entry.event);
+  }
+
+  async executeActor(
+    context: restate.ObjectSharedContext,
+    request: ExecuteRequest,
+  ): Promise<void> {
+    const machine = this.runtime.resolveMachine(await getMachineId(context));
+    const outcome = await runActor(machine, request.params, context);
+    const sender = context.objectSendClient<MachineVirtualObject>(
+      this.runtime.self,
+      context.key,
+    );
+
+    if (outcome.status === "done") {
+      sender.actorDone({
+        actorId: request.params.id,
+        executionId: request.executionId,
+        output: outcome.output,
+      });
+    } else {
+      sender.actorError({
+        actorId: request.params.id,
+        executionId: request.executionId,
+        error: outcome.error,
+      });
     }
   }
 
@@ -595,7 +600,7 @@ async function initializeRoot<M extends AnyStateMachine>(
   clearRuntimeState(context);
   clearIdentity(context);
 
-  const handler = await buildHandlerContext(runtime, context);
+  const handler = await loadHandlerContext(runtime, context);
   const result = await computeStep(context, "create", () =>
     initialStep(runtime.rootMachine, { input, isChild: false }),
   );
@@ -611,9 +616,10 @@ async function initializeChild(
   clearRuntimeState(context);
   setIdentity(context, request);
 
-  const handler = await buildHandlerContext(runtime, context);
+  const machine = runtime.resolveMachine(request.machineId);
+  const handler = await loadHandlerContext(runtime, context);
   const result = await computeStep(context, "initChild", () =>
-    initialStep(runtime.resolveMachine(request.machineId), {
+    initialStep(machine, {
       input: request.input,
       isChild: true,
     }),
@@ -648,7 +654,7 @@ async function consumeActorExecution(
   return true;
 }
 
-async function buildHandlerContext(
+async function loadHandlerContext(
   runtime: MachineRuntime,
   context: restate.ObjectContext,
 ): Promise<HandlerContext> {
@@ -675,7 +681,7 @@ async function loadInstance(
   const stored = await getState(context);
   if (stored === null) return null;
 
-  const handler = await buildHandlerContext(runtime, context);
+  const handler = await loadHandlerContext(runtime, context);
   const machine = runtime.resolveMachine(await getMachineId(context));
   const children = await getChildren(context);
   const actorExecutions = await getActorExecutions(context);
@@ -729,7 +735,7 @@ async function validateNotDisposed(
 ): Promise<void> {
   if (await isDisposed(context)) {
     throw new restate.TerminalError(
-      "The state machine has been disposed after reaching it's final state",
+      "The state machine was disposed after reaching its final state.",
       { errorCode: 410 },
     );
   }
@@ -742,7 +748,7 @@ async function getRequiredState(
   if (stored !== null) return stored;
 
   throw new restate.TerminalError(
-    "No state machine found for this workflow ID. Call 'create' first.",
+    "No state machine exists for this object key. Call 'create' first.",
     { errorCode: 404 },
   );
 }
@@ -777,6 +783,17 @@ function validateCondition(condition: string): void {
       errorCode: 400,
     });
   }
+}
+
+function selectSerde<T>(
+  schema: StandardSchema<T> | undefined,
+): restate.Serde<T> {
+  if (schema !== undefined) return restate.serde.schema(schema);
+
+  // JsonSerde's optional schema property is wider than Serde<T> under this
+  // project's exactOptionalPropertyTypes setting; its runtime contract is the
+  // default JSON Serde we want here.
+  return restate.serde.json as restate.Serde<T>;
 }
 
 function validateFinalStateTTL(value: number | undefined): void {

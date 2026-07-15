@@ -1,5 +1,5 @@
 /*
- * Calling snapshot()/send() on a workflow id that was never created rejects with
+ * Calling snapshot()/send() on a machine instance that was never created rejects with
  * a 404 TerminalError, and succeeds after create(). Drives the raw object client
  * (not the auto-creating runner) so it can call before create(). Runs under both
  * replay modes.
@@ -12,8 +12,8 @@ import {
 } from "@restatedev/restate-sdk-testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMachine } from "xstate";
-import type { MachineVirtualObject } from "../src";
-import { createMachineObject } from "../src";
+import type { MachineVirtualObject } from "../../src";
+import { createMachineObject } from "../../src";
 
 const simpleMachine = createMachine({
   id: "simplev1",
@@ -30,7 +30,7 @@ const REPLAY_MODES = [
 ] as const;
 
 describe.each(REPLAY_MODES)(
-  "Non-existent workflow ID [$label]",
+  "Non-existent machine instance [$label]",
   ({ alwaysReplay }) => {
     const obj = createMachineObject("default", simpleMachine);
     let env: RestateTestEnvironment;
@@ -61,40 +61,36 @@ describe.each(REPLAY_MODES)(
     });
 
     it(
-      "Should return 404 when calling snapshot on a non-existent workflow ID",
+      "returns 404 when snapshot is called before create",
       { timeout: 30_000 },
       async () => {
         await expect(() => client.snapshot()).rejects.toThrow(
-          "No state machine found for this workflow ID. Call 'create' first.",
+          "No state machine exists for this object key. Call 'create' first.",
         );
       },
     );
 
     it(
-      "Should return 404 when calling send on a non-existent workflow ID",
+      "returns 404 when send is called before create",
       { timeout: 30_000 },
       async () => {
         await expect(() => client.send({ type: "START" })).rejects.toThrow(
-          "No state machine found for this workflow ID. Call 'create' first.",
+          "No state machine exists for this object key. Call 'create' first.",
         );
       },
     );
 
-    it(
-      "Should succeed after calling create first",
-      { timeout: 30_000 },
-      async () => {
-        await client.create({});
-        expect(await client.snapshot()).toMatchObject({
-          status: "active",
-          value: "idle",
-        });
-        await client.send({ type: "START" });
-        expect(await client.snapshot()).toMatchObject({
-          status: "active",
-          value: "running",
-        });
-      },
-    );
+    it("succeeds after create", { timeout: 30_000 }, async () => {
+      await client.create({});
+      expect(await client.snapshot()).toMatchObject({
+        status: "active",
+        value: "idle",
+      });
+      await client.send({ type: "START" });
+      expect(await client.snapshot()).toMatchObject({
+        status: "active",
+        value: "running",
+      });
+    });
   },
 );

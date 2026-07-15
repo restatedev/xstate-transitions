@@ -1,10 +1,8 @@
 /*
- * Phase 0 — behaviour-pinning test.
- *
  * An `after` delayed transition surfaces as a delayed `xstate.raise` action,
- * which dispatchAction turns into a Restate delayed self-send. The host (Restate)
- * owns the clock, so the machine must NOT advance before the delay elapses, and
- * must advance after. This locks the delayed-self-send pattern.
+ * which the effects layer turns into a Restate delayed self-send. Restate owns
+ * the clock, so the machine must not advance before the delay elapses and must
+ * advance afterward.
  */
 
 import { expect, it } from "vitest";

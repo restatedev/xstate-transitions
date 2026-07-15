@@ -4,7 +4,6 @@ import {
   executeEffects,
   maybeScheduleCleanup,
   reportTerminal,
-  selfDef,
   settleSubscriptions,
 } from "../../src/restate/effects";
 import type { HandlerContext } from "../../src/restate/types";
@@ -64,7 +63,7 @@ function createHarness(options?: {
 
   const handler: HandlerContext = {
     ctx: context as unknown as ObjectContext,
-    self: selfDef("machine"),
+    self: { name: "machine" },
     ...options,
   };
 
@@ -80,6 +79,16 @@ const activeSnapshot = (overrides?: Partial<ReturnedSnapshot>) => ({
 });
 
 describe("executeEffects", () => {
+  it("does no durable I/O when there are no effects", async () => {
+    const harness = createHarness();
+
+    await executeEffects(harness.handler, []);
+
+    expect(harness.context.get).not.toHaveBeenCalled();
+    expect(harness.context.set).not.toHaveBeenCalled();
+    expect(harness.context.objectSendClient).not.toHaveBeenCalled();
+  });
+
   it("dispatches promise actors to the internal actor handler", async () => {
     const harness = createHarness();
     const params: SpawnParams = { id: "work", src: "work", input: { n: 1 } };

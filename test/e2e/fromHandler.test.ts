@@ -1,26 +1,16 @@
 /*
- * GAP TEST (scaffold, todo) — BLOCKED BY: Phase 4 "Restate-aware fromPromise (ctx)"
- * and Phase 5 "promise retry semantics".
- *
- * Target behaviour (3 cases):
+ * Ctx-aware Restate actors (fromHandler): the creator receives the Restate ctx
+ * and journals its own side effects with ctx.run, across three outcomes:
  *  (1) success: the ctx.run side-effect runs once -> "Email sent";
- *  (2) transient error: rejected twice then resolves -> 3 invocations (Restate
- *      retries the effect) -> "Email sent";
+ *  (2) transient error: rejected twice then resolves -> 3 invocations (the inner
+ *      ctx.run retries the effect) -> "Email sent";
  *  (3) TerminalError: not retried -> 1 invocation -> onError -> "Failed".
- *
- * Un-skip when: a Restate-aware `fromPromise` from ../src passes `{ input, ctx }`
- * to the creator (ctx.run available), `_execute` catches ONLY TerminalError to emit
- * onError while letting transient errors propagate for Restate to retry.
- *
- * NOTE: currently imports vanilla `fromPromise` from "xstate" so collection
- * succeeds; switch to `../src` when it exists. `ctx` usage below is the
- * target shape and only type-checks against the future module.
  */
 
 import { TerminalError } from "@restatedev/restate-sdk";
 import { expect, it, vi } from "vitest";
 import { setup } from "xstate";
-import { fromPromise } from "../src";
+import { fromHandler } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
@@ -31,7 +21,7 @@ const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
       context: {} as { customer: string },
     },
     actors: {
-      sendEmail: fromPromise<undefined, { customer: string }>(
+      sendEmail: fromHandler<undefined, { customer: string }>(
         async ({ input, ctx }) => {
           await ctx.run("Sending email to", async () => {
             await sendEmail(input.customer);
@@ -40,7 +30,7 @@ const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
       ),
     },
   }).createMachine({
-    id: "async-function-invocation",
+    id: "handler-invocation",
     initial: "Send email",
     context: ({ input }) => ({ customer: input.customer }),
     states: {
@@ -57,9 +47,9 @@ const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
     },
   });
 
-describeE2E("A Restate-aware fromPromise state machine", (createActor) => {
+describeE2E("A fromHandler state machine", (createActor) => {
   it(
-    "should run the promise actor with restate context",
+    "runs the actor with the Restate context",
     { timeout: 20_000 },
     async () => {
       const sendEmail = vi.fn<(customer: string) => Promise<void>>();
@@ -78,8 +68,8 @@ describeE2E("A Restate-aware fromPromise state machine", (createActor) => {
   );
 
   it(
-    "should retry a transient error in fromPromise",
-    { timeout: 20_000 },
+    "retries a transient error via the inner ctx.run",
+    { timeout: 30_000 },
     async () => {
       const sendEmail = vi
         .fn<(customer: string) => Promise<void>>()
@@ -91,7 +81,7 @@ describeE2E("A Restate-aware fromPromise state machine", (createActor) => {
         input: { customer: "bob@mop.com" },
       });
       await vi.waitFor(() => expect(sendEmail).toHaveBeenCalledTimes(3), {
-        timeout: 10_000,
+        timeout: 20_000,
       });
       await eventually(() => actor.snapshot()).toMatchObject({
         status: "done",
@@ -101,7 +91,7 @@ describeE2E("A Restate-aware fromPromise state machine", (createActor) => {
   );
 
   it(
-    "should route a terminal error to onError",
+    "routes a TerminalError to onError",
     { timeout: 20_000 },
     async () => {
       const sendEmail = vi

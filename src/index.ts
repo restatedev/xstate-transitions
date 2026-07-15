@@ -1,7 +1,12 @@
 // Public API
 export { createMachineObject } from "./restate/object";
-export type { RestatePromiseCreator } from "./restate/promise";
-export { fromPromise } from "./restate/promise";
+export { fromHandler, fromPromise } from "./restate/promise";
+export type {
+  FromPromiseOptions,
+  HandlerCreator,
+  PromiseCreator,
+  RetryPolicy,
+} from "./restate/promise";
 export type {
   MachineContract,
   MachineObjectOptions,

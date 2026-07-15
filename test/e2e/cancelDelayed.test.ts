@@ -1,10 +1,7 @@
 /*
- * Phase 7 — scheduled-event cancellation (self events).
- *
- * A delayed `raise({...}, { delay, id })` is routed through the `_scheduled`
- * handler guarded by a uuid in the `scheduled` KV. `cancel(id)` removes the
- * entry, so when the delayed delivery fires its guard fails and the event is
- * dropped.
+ * A delayed `raise({...}, { delay, id })` is routed through `deliverScheduled`,
+ * guarded by a UUID in durable scheduled-event state. `cancel(id)` removes the
+ * entry, so a later delivery fails the guard and the event is dropped.
  */
 
 import { expect, it } from "vitest";

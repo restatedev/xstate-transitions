@@ -1,5 +1,5 @@
 /*
- * Cross-object messaging + Phase 7 cancellation.
+ * Cross-object messaging and delayed-event cancellation.
  *
  * Exercises all three of:
  *   (a) a spawned CHILD state-machine actor with stable identity (its own
@@ -7,13 +7,13 @@
  *   (b) a delayed inter-actor sendTo(child, START, { delay, id }),
  *   (c) cancel(id) of that scheduled event.
  *
- * The child's `execute` actor uses the Restate-aware fromPromise so it gets a
- * ctx (ctx.run) inside the child object.
+ * The child's `execute` actor uses fromHandler so it gets a ctx (ctx.run) inside
+ * the child object.
  */
 
 import { expect, it, vi } from "vitest";
 import { assign, cancel, sendTo, setup } from "xstate";
-import { fromPromise } from "../src";
+import { fromHandler } from "../../src";
 import { wait } from "./eventually.js";
 import { describeE2E } from "./harness";
 
@@ -24,7 +24,7 @@ const machineFactory = (executor: () => Promise<void>) => {
   const taskMachine = setup({
     types: { events: {} as TaskEvents },
     actors: {
-      execute: fromPromise(async ({ ctx }) => {
+      execute: fromHandler(async ({ ctx }) => {
         await ctx.run("Execute", async () => {
           await executor();
         });

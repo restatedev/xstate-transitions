@@ -1,11 +1,7 @@
 /*
- * Phase 0 — behaviour-pinning test.
- *
- * Pins the CURRENT semantics of calling create() again on an existing instance:
- * core.ts's create runs initialTransition and overwrites the "state" KV
- * unconditionally, so a second create resets the machine to its initial
- * snapshot. This is documented here so a later disposal/guard change is a
- * deliberate decision, not an accident.
+ * Calling create() again clears the instance's runtime bookkeeping, runs the
+ * initial transition, and replaces its snapshot. This test makes the reset
+ * semantics explicit.
  */
 
 import { expect, it } from "vitest";

@@ -5,32 +5,10 @@ import type {
   InvokeConfig,
 } from "xstate";
 
-/** Sentinel marking a Restate-aware promise actor (see restate/promise.ts). */
-export const RESTATE_PROMISE_ACTOR = "restate.promise.actor";
-
 /** Plain error data safe to persist and send between Restate handlers. */
 export interface NormalizedError {
   name: string;
   message: string;
-}
-
-/** A Restate-aware promise actor: an xstate logic carrying our creator. */
-export interface RestatePromiseActor {
-  sentinel: typeof RESTATE_PROMISE_ACTOR;
-  config: (args: { input: unknown; ctx: unknown }) => unknown;
-}
-
-export function isRestatePromiseActor(
-  logic: unknown,
-): logic is RestatePromiseActor {
-  if (typeof logic !== "object" || logic === null) return false;
-  const candidate = logic as Partial<RestatePromiseActor>;
-  // Check `config` too: the predicate claims it is callable, so verify it —
-  // otherwise a mistagged value would pass and blow up when we call config().
-  return (
-    candidate.sentinel === RESTATE_PROMISE_ACTOR &&
-    typeof candidate.config === "function"
-  );
 }
 
 /**

@@ -1,9 +1,7 @@
 /*
- * Phase 0 — behaviour-pinning test.
- *
- * When an invoked promise actor throws, doExecuteAction maps it to an
- * `xstate.error.actor.<id>` event which is sent back to the machine, driving the
- * invoke's `onError` transition. This locks that error-routing path.
+ * When an invoked promise actor throws, the internal actor handlers translate
+ * its outcome to an `xstate.error.actor.<id>` event, which drives the invoke's
+ * `onError` transition.
  */
 
 import { it } from "vitest";

@@ -1,14 +1,11 @@
 /*
- * Phase 0/1 — behaviour-pinning tests (pure, no Restate container).
+ * The Restate object persists a serializable form of the snapshot and
+ * rehydrates it before every transition. These pure tests lock that contract.
  *
- * xstate-transitions is stateless between requests: core.ts persists a
- * serializable form of the snapshot under the KV key "state" and rehydrates it
- * before every `transition(...)`. These tests lock that contract.
- *
- * They also show WHY core.ts must not persist the raw snapshot naively: the raw
+ * They also show why the raw snapshot cannot be persisted naively: its
  * `historyValue` holds live StateNode instances that do not survive JSON, which
- * would silently break history states. core.ts avoids this by serializing
- * historyValue as node ids (toStored/fromStored) — proven by the last test.
+ * would silently break history states. `toStored`/`fromStored` serialize that
+ * value as node IDs, as proven by the last test.
  */
 
 import { describe, expect, it } from "vitest";
@@ -46,7 +43,7 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
       },
     });
 
-    // Drive it the way core.ts does: rehydrate from the persisted snapshot each step.
+    // Rehydrate from the persisted snapshot before each step, like the object.
     let [snapshot] = initialTransition(counter);
     expect((snapshot as AnyMachineSnapshot).value).toBe("idle");
 
@@ -98,7 +95,7 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
     // Root cause: the raw snapshot's `historyValue` holds live StateNode
     // instances; JSON.stringify turns them into plain objects, so `transition`
     // can no longer resolve the history target and falls back to the initial
-    // sub-state. This is exactly why core.ts does NOT round-trip the raw
+    // sub-state. This is exactly why the integration does not round-trip the raw
     // snapshot; the next test shows the history-safe helpers it uses instead.
     const machine = historyMachine();
     const step = (snap: unknown, event: { type: string }) =>
@@ -117,8 +114,8 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
     expect((snapshot as AnyMachineSnapshot).value).toEqual({ main: "one" });
   });
 
-  it("history state survives core.ts's history-safe persistence helpers", () => {
-    // core.ts does NOT persist the raw snapshot; it uses toStored/fromStored,
+  it("history state survives the history-safe persistence helpers", () => {
+    // The integration does not persist the raw snapshot; it uses toStored/fromStored,
     // which serialize historyValue as node ids and rehydrate them. This is the
     // fix for the limitation documented above.
     const machine = historyMachine();

@@ -7,12 +7,13 @@
 
 import { expect, it } from "vitest";
 import { assign, setup } from "xstate";
-import { fromPromise } from "../src";
+import { fromHandler } from "../../src";
 import { describeE2E } from "./harness";
 
 const dateMachine = setup({
   actors: {
-    getCurrentDate: fromPromise(async ({ ctx }) => ctx.date.now()),
+    // ctx-aware: reads the deterministic Restate clock, so it uses fromHandler.
+    getCurrentDate: fromHandler(async ({ ctx }) => ctx.date.now()),
   },
 }).createMachine({
   id: "date",
