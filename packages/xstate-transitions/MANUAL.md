@@ -563,7 +563,7 @@ child key:  order-123::payment
 ```
 
 Nested children extend the same pattern. The integration discovers child
-machine definitions recursively from `setup({ actors })` and direct
+machine definitions recursively from `setup({ actorSources })` and direct
 `invoke.src` references.
 
 Supported routing includes:
@@ -645,25 +645,26 @@ The value must be finite and non-negative. `0` requests immediate cleanup.
 This table describes the behavior implemented and covered by tests in this
 repository, not every feature available in XState itself.
 
-| Pattern                                            | Status                 | Notes                                                   |
-| -------------------------------------------------- | ---------------------- | ------------------------------------------------------- |
-| Compound and parallel states                       | Supported              | One full macrostep is persisted per event               |
-| Guards, `assign`, `always`, immediate `raise`      | Supported              | Resolved during pure transition computation             |
-| Final output and tags                              | Supported              | Exposed in returned snapshots                           |
-| Shallow and deep history                           | Supported              | State-node references are serialized as IDs             |
-| Promise `invoke` and `spawn`                       | Supported              | `fromPromise`/`fromHandler`; all run inside `ctx.run`   |
-| Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                      |
-| Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance        |
-| `enq.sendTo` (self / child / parent)               | Supported targets only | Self, known child, and parent routing                   |
-| `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                  |
-| `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                           |
-| `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`                |
-| Standard Schema input/event contracts              | Integration feature    | Recommended for every public ingress boundary           |
-| Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone |
-| Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed          |
-| Callback actors (`createCallbackLogic`)            | **Not supported**      | No long-lived in-process actor exists                   |
-| Observable actors and other long-lived actor logic | Not guaranteed         | Only tested actor patterns should be relied upon        |
-| Arbitrary actor-system addressing                  | **Not supported**      | Routing is limited to self, parent, and known children  |
+| Pattern                                            | Status                 | Notes                                                     |
+| -------------------------------------------------- | ---------------------- | --------------------------------------------------------- |
+| Compound and parallel states                       | Supported              | One full macrostep is persisted per event                 |
+| Guards, `assign`, `always`, immediate `raise`      | Supported              | Resolved during pure transition computation               |
+| Final output and tags                              | Supported              | Exposed in returned snapshots                             |
+| Shallow and deep history                           | Supported              | State-node references are serialized as IDs               |
+| Promise `invoke` and `spawn`                       | Supported              | `fromPromise`/`fromHandler`; all run inside `ctx.run`     |
+| Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                        |
+| Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance          |
+| `enq.sendTo` (self / child / parent)               | Supported targets only | Self, known child, and parent routing                     |
+| `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                    |
+| `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                             |
+| `enq.stop(ref)` / invoke exit                      | Supported              | Stopped by explicit stop or when the invoking state exits |
+| `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`                  |
+| Standard Schema input/event contracts              | Integration feature    | Recommended for every public ingress boundary             |
+| Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone   |
+| Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed            |
+| Callback actors (`createCallbackLogic`)            | **Not supported**      | No long-lived in-process actor exists                     |
+| Observable actors and other long-lived actor logic | Not guaranteed         | Only tested actor patterns should be relied upon          |
+| Arbitrary actor-system addressing                  | **Not supported**      | Routing is limited to self, parent, and known children    |
 
 The custom-action limitation is especially important. An arbitrary effect
 enqueued as `enq(sendEmail)` may type-check in XState, but this integration does
@@ -804,7 +805,7 @@ token and exits without sending the event.
 ### A child machine cannot be resolved
 
 Give every machine a unique explicit `id`, and make the child reachable through
-`setup({ actors })` or a direct `invoke.src` machine reference. Duplicate IDs
+`setup({ actorSources })` or a direct `invoke.src` machine reference. Duplicate IDs
 are rejected when the object definition is created.
 
 ### Behavior changed after upgrading XState
@@ -1070,7 +1071,7 @@ ignored. Public callers cannot inject these lifecycle events through `send`.
 At object-definition time, `buildRegistry` recursively visits:
 
 - the root machine;
-- machines in each machine's `implementations.actors`; and
+- machines in each machine's `implementations.actorSources`; and
 - machine objects referenced directly by `invoke.src`.
 
 It indexes them by machine ID and rejects ambiguous duplicate IDs.

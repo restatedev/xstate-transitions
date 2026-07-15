@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Run XState v5 pure-transition machines as durable Restate virtual objects",
+  "description": "Run XState v6 pure-transition machines as durable Restate virtual objects",
   "license": "MIT",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
