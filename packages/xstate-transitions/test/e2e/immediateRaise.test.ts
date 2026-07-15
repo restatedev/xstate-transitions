@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2025-2026 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+
+/*
  * A non-delayed `raise` is drained INSIDE transition()'s macrostep (resolveRaise
  * enqueues it on the internal queue), so the snapshot is already advanced when
  * the object persists it. No Restate delivery is needed: one public event must

@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2025-2026 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+
+/*
  * Calling create() again clears the instance's runtime bookkeeping, runs the
  * initial transition, and replaces its snapshot. This test makes the reset
  * semantics explicit.

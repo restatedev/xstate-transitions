@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2025-2026 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+
+/*
  * Restate journals the complete Step produced by one XState macrostep. These
  * cases deliberately perform several nondeterministic observations inside a
  * transition and couple the resulting snapshot to an emitted actor effect.

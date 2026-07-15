@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2025-2026 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+
+/*
  * A promise actor reads the deterministic Restate clock via ctx.date.now(), and
  * a native Date.now() captured in a transition `assign` lands in context. Runs
  * under both replay modes; see dateTransition.test.ts for the explicit

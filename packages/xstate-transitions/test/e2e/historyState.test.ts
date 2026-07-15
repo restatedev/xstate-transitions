@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2025-2026 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+
+/*
  * Drives a machine with a shallow history state through the real Restate object
  * (create/send/snapshot). The snapshot layer persists historyValue as node IDs
  * and rehydrates them, so RESUME restores the remembered sub-state across the

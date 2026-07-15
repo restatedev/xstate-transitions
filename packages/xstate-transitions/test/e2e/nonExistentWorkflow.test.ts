@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2025-2026 - Restate Software, Inc., Restate GmbH
+ *
+ * This file is part of the Restate SDK for Node.js/TypeScript,
+ * which is released under the MIT license.
+ *
+ * You can find a copy of the license in file LICENSE in the root
+ * directory of this repository or package, or at
+ * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
+ */
+
+/*
  * Calling snapshot()/send() on a machine instance that was never created rejects with
  * a 404 TerminalError, and succeeds after create(). Drives the raw object client
  * (not the auto-creating runner) so it can call before create(). Runs under both
