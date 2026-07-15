@@ -1,6 +1,9 @@
 import { createMachine } from "xstate";
 import { describe, expect, it } from "vitest";
-import { createMachineObject } from "../../src/restate/object";
+import {
+  classifyKnownActors,
+  createMachineObject,
+} from "../../src/restate/object";
 
 describe("createMachineObject configuration", () => {
   const machine = createMachine({ id: "machine" });
@@ -18,5 +21,29 @@ describe("createMachineObject configuration", () => {
     expect(() =>
       createMachineObject("machine", machine, { finalStateTTL: 0 }),
     ).not.toThrow();
+  });
+});
+
+describe("classifyKnownActors", () => {
+  it("separates child machines from promise actor executions", () => {
+    const children = {
+      child: { key: "child-key", machineId: "child-machine" },
+    };
+    const actorExecutions = {
+      child: "child-execution",
+      promise: "promise-execution",
+    };
+
+    expect(classifyKnownActors(children, actorExecutions)).toEqual({
+      knownChildIds: ["child"],
+      knownPromiseIds: ["promise"],
+    });
+  });
+
+  it("classifies every actor execution as a promise without child records", () => {
+    expect(classifyKnownActors({}, { first: "one", second: "two" })).toEqual({
+      knownChildIds: [],
+      knownPromiseIds: ["first", "second"],
+    });
   });
 });

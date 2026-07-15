@@ -13,7 +13,12 @@ import {
   createDoneActorEvent,
   createNormalizedErrorActorEvent,
 } from "../xstate/actors";
-import type { ReturnedSnapshot, Step, StoredState } from "../xstate/types";
+import type {
+  ResumeInput,
+  ReturnedSnapshot,
+  Step,
+  StoredState,
+} from "../xstate/types";
 import {
   selfDef,
   sendClient,
@@ -46,6 +51,7 @@ import {
   setSubscriptions,
 } from "./state";
 import type {
+  ChildRecord,
   HandlerContext,
   MachineObjectOptions,
   MachineVirtualObject,
@@ -57,6 +63,28 @@ import type {
   SubscribeRequest,
   WaitForRequest,
 } from "./types";
+
+type KnownActors = Pick<ResumeInput, "knownChildIds" | "knownPromiseIds">;
+
+interface LoadedInstance {
+  readonly stored: StoredState;
+  readonly machine: AnyStateMachine;
+  readonly handler: HandlerContext;
+  readonly knownActors: KnownActors;
+}
+
+/** Classify persisted actor records for XState snapshot restoration. */
+export function classifyKnownActors(
+  children: Readonly<Record<string, ChildRecord>>,
+  actorExecutions: Readonly<Record<string, string>>,
+): KnownActors {
+  const knownChildIds = Object.keys(children);
+  const knownPromiseIds = Object.keys(actorExecutions).filter(
+    (actorId) => !Object.hasOwn(children, actorId),
+  );
+
+  return { knownChildIds, knownPromiseIds };
+}
 
 // ===========================================================================
 // Entrypoint
@@ -149,30 +177,49 @@ export function createMachineObject<
     maybeScheduleCleanup(handler, result.returned);
   }
 
+  async function loadInstance(
+    context: restate.ObjectContext,
+  ): Promise<LoadedInstance | null> {
+    const stored = await getState(context);
+    if (stored === null) return null;
+
+    const handler = await buildHandlerContext(context);
+    const machine = getMachine(await getMachineId(context));
+    const children = await getChildren(context);
+    const actorExecutions = await getActorExecutions(context);
+
+    return {
+      stored,
+      machine,
+      handler,
+      knownActors: classifyKnownActors(children, actorExecutions),
+    };
+  }
+
+  function computeEventStep(
+    context: restate.ObjectContext,
+    instance: LoadedInstance,
+    event: AnyEventObject,
+  ): Promise<Step> {
+    return computeStep(context, "event", () =>
+      resumeStep(instance.machine, {
+        stored: instance.stored,
+        event,
+        isChild: instance.handler.parentKey !== undefined,
+        ...instance.knownActors,
+      }),
+    );
+  }
+
   async function applyEvent(
     context: restate.ObjectContext,
     event: AnyEventObject,
   ): Promise<void> {
-    const stored = await getState(context);
-    if (stored == null) return;
-    const handler = await buildHandlerContext(context);
-    const instanceMachine = getMachine(await getMachineId(context));
-    const children = await getChildren(context);
-    const actorExecutions = await getActorExecutions(context);
-    const knownChildIds = Object.keys(children);
-    const knownPromiseIds = Object.keys(actorExecutions).filter(
-      (actorId) => children[actorId] === undefined,
-    );
-    const result = await computeStep(context, "event", () =>
-      resumeStep(instanceMachine, {
-        stored,
-        event,
-        isChild: handler.parentKey != null,
-        knownChildIds,
-        knownPromiseIds,
-      }),
-    );
-    await commit(handler, result);
+    const instance = await loadInstance(context);
+    if (instance === null) return;
+
+    const result = await computeEventStep(context, instance, event);
+    await commit(instance.handler, result);
   }
 
   async function consumeActorExecution(
