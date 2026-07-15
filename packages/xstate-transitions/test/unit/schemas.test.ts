@@ -211,39 +211,92 @@ describe("deriveEventSchema", () => {
     }
   });
 
-  it("degrades a payload with $defs/$ref to a valid discriminant branch", () => {
-    // A recursive/reused payload emits document-root-relative $refs; inlining
-    // would dangle them, so the branch must degrade rather than emit invalid JSON.
-    const recursive = <T>(): StandardSchema<T> =>
-      ({
-        "~standard": {
-          version: 1,
-          vendor: "test",
-          validate: (v: unknown) => ({ value: v as T }),
-          jsonSchema: {
-            output: () => ({
-              type: "object",
-              $defs: { Node: { type: "object" } },
-              properties: { child: { $ref: "#/$defs/Node" } },
-              required: ["child"],
-            }),
-          },
-        },
-      }) as unknown as StandardSchema<T>;
+  // A payload whose JSON Schema output is `json`, carrying whatever $ref/$defs
+  // shape a real library would emit for recursion or reuse.
+  const payloadEmitting = <T>(
+    json: Record<string, unknown>,
+  ): StandardSchema<T> =>
+    ({
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (v: unknown) => ({ value: v as T }),
+        jsonSchema: { output: () => json },
+      },
+    }) as unknown as StandardSchema<T>;
 
-    const m = setup({
-      schemas: { events: { TREE: recursive() } },
-    }).createMachine({ id: "m", initial: "a", states: { a: {} } });
+  const treeBranch = (json: {
+    anyOf: Array<Record<string, unknown>>;
+  }): Record<string, unknown> | undefined =>
+    json.anyOf.find(
+      (b) =>
+        (
+          (b.properties as Record<string, { const?: string }> | undefined)
+            ?.type as { const?: string } | undefined
+        )?.const === "TREE",
+    );
 
-    const std = deriveEventSchema(m)!["~standard"] as {
+  const eventJsonSchema = (schema: StandardSchema<unknown>) => {
+    const std = schema["~standard"] as {
       jsonSchema?: {
         output: (o: { target: string }) => {
           anyOf: Array<Record<string, unknown>>;
         };
       };
     };
-    const json = std.jsonSchema!.output({ target: "draft-2020-12" });
+    return std.jsonSchema!.output({ target: "draft-2020-12" });
+  };
+
+  it("degrades a payload with top-level $defs/$ref to a valid discriminant branch", () => {
+    // A reused payload emits document-root-relative $refs; inlining would dangle
+    // them, so the branch must degrade rather than emit invalid JSON.
+    const m = setup({
+      schemas: {
+        events: {
+          TREE: payloadEmitting({
+            type: "object",
+            $defs: { Node: { type: "object" } },
+            properties: { child: { $ref: "#/$defs/Node" } },
+            required: ["child"],
+          }),
+        },
+      },
+    }).createMachine({ id: "m", initial: "a", states: { a: {} } });
+
+    const json = eventJsonSchema(deriveEventSchema(m)!);
     expect(json.anyOf[0]).toEqual({
+      type: "object",
+      properties: { type: { const: "TREE" } },
+      required: ["type"],
+    });
+    expect(JSON.stringify(json)).not.toMatch(/\$ref|\$defs/);
+  });
+
+  it("degrades a payload with a nested (recursive) $ref to a valid discriminant branch", () => {
+    // Zod 4.4.3's actual output for `z.object({ value: z.string(),
+    // get children() { return z.array(this); } })`: recursion is a nested
+    // `{ "$ref": "#" }` under `children.items`, with NO top-level $defs/$ref.
+    // Inlining would rebase "#" against the composed anyOf's root, so discovery
+    // would wrongly require every child node to be a full { type: "TREE" } event.
+    const m = setup({
+      schemas: {
+        events: {
+          TREE: payloadEmitting({
+            $schema: "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: {
+              value: { type: "string" },
+              children: { type: "array", items: { $ref: "#" } },
+            },
+            required: ["value", "children"],
+            additionalProperties: false,
+          }),
+        },
+      },
+    }).createMachine({ id: "m", initial: "a", states: { a: {} } });
+
+    const json = eventJsonSchema(deriveEventSchema(m)!);
+    expect(treeBranch(json)).toEqual({
       type: "object",
       properties: { type: { const: "TREE" } },
       required: ["type"],

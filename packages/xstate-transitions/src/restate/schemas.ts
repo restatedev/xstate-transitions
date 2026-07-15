@@ -219,16 +219,18 @@ function eventBranchJsonSchema(
   const payload =
     schema === undefined ? undefined : payloadJsonSchema(schema, options);
 
-  // Only inline a self-contained object payload. A payload that carries `$defs`
-  // (recursive or reused schemas) uses document-root-relative `$ref`s that would
-  // dangle once nested here, and a non-object payload (union / intersection)
-  // cannot merge with the `type` discriminant. In both cases advertise just the
-  // discriminant so the discovery schema stays valid rather than misleading.
+  // Only inline a self-contained object payload. A payload that carries a `$ref`
+  // or `$defs` anywhere in its subtree uses document-root-relative references
+  // (e.g. Zod emits recursion as a nested `{ "$ref": "#" }` under `items`, with
+  // nothing at the top level) that would rebase against the wrong root once
+  // nested here — silently corrupting the discovery schema. A non-object payload
+  // (union / intersection) likewise cannot merge with the `type` discriminant.
+  // In all these cases advertise just the discriminant so the discovery schema
+  // stays valid rather than misleading.
   if (
     payload === undefined ||
     payload.type !== "object" ||
-    "$defs" in payload ||
-    "$ref" in payload
+    containsRefOrDefs(payload)
   ) {
     return discriminant;
   }
@@ -250,6 +252,29 @@ function eventBranchJsonSchema(
     properties: { type: { const: type }, ...(properties ?? {}) },
     required: Array.from(new Set(["type", ...(required ?? [])])),
   };
+}
+
+/**
+ * Whether a JSON Schema node carries a `$ref` or `$defs` anywhere in its
+ * subtree. Libraries express recursion and reuse with document-root-relative
+ * references — Zod 4, for one, emits a recursive field as a nested
+ * `{ "$ref": "#" }` with no top-level `$defs`/`$ref` to signal it. Inlining such
+ * a payload into an event branch would rebase those references against a
+ * different document root, so a positive result degrades the branch to the bare
+ * discriminant instead. Output schemas are acyclic trees (recursion is encoded
+ * as `$ref`, not as an object cycle), so this walk always terminates.
+ */
+function containsRefOrDefs(node: unknown): boolean {
+  if (Array.isArray(node)) {
+    return node.some(containsRefOrDefs);
+  }
+  if (typeof node === "object" && node !== null) {
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "$ref" || key === "$defs") return true;
+      if (containsRefOrDefs(value)) return true;
+    }
+  }
+  return false;
 }
 
 /** A payload schema's JSON Schema via the Standard extension, or `undefined`. */
