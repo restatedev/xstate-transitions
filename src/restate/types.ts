@@ -1,10 +1,16 @@
-import type { AnyStateMachine, EventFrom, InputFrom } from "xstate";
+import type {
+  AnyEventObject,
+  AnyStateMachine,
+  EventFrom,
+  InputFrom,
+} from "xstate";
 import type {
   ObjectContext,
+  ObjectSharedContext,
   VirtualObjectDefinition,
   ObjectOptions,
 } from "@restatedev/restate-sdk";
-import type { ReturnedSnapshot, SpawnParams } from "../xstate/types";
+import type { Condition, ReturnedSnapshot, SpawnParams } from "../xstate/types";
 
 export type MachineObjectOptions = {
   /**
@@ -29,7 +35,7 @@ export interface ScheduledEvent {
 export interface ScheduledDelivery {
   uuid: string;
   targetKey: string;
-  event: unknown;
+  event: AnyEventObject;
 }
 
 /** Payload of the internal `_init` handler (initializes a child instance). */
@@ -52,29 +58,38 @@ export interface Subscription {
 }
 
 export interface SubscribeRequest {
-  condition: string;
+  condition: Condition;
   awakeableId: string;
 }
 
 export interface WaitForRequest<M extends AnyStateMachine = AnyStateMachine> {
-  condition: string;
+  condition: Condition;
   timeout?: number;
   event?: EventFrom<M>;
 }
 
 export type MachineVirtualObject<M extends AnyStateMachine> = {
-  create: (context: any, input: InputFrom<M>) => Promise<void>;
-  send: (context: any, event: EventFrom<M>) => Promise<void>;
-  snapshot: (context: any) => Promise<ReturnedSnapshot>;
+  create: (context: ObjectContext, input: InputFrom<M>) => Promise<void>;
+  send: (context: ObjectContext, event: EventFrom<M>) => Promise<void>;
+  snapshot: (context: ObjectContext) => Promise<ReturnedSnapshot>;
   waitFor: (
-    context: any,
+    context: ObjectSharedContext,
     request: WaitForRequest<M>,
   ) => Promise<ReturnedSnapshot>;
-  subscribe: (context: any, request: SubscribeRequest) => Promise<void>;
-  executeActor: (context: any, request: ExecuteRequest) => Promise<void>;
-  deliverScheduled: (context: any, request: ScheduledEvent) => Promise<void>;
-  initChild: (context: any, request: InitRequest) => Promise<void>;
-  cleanupState: (context: any) => Promise<void>;
+  subscribe: (
+    context: ObjectContext,
+    request: SubscribeRequest,
+  ) => Promise<void>;
+  executeActor: (
+    context: ObjectSharedContext,
+    request: ExecuteRequest,
+  ) => Promise<void>;
+  deliverScheduled: (
+    context: ObjectContext,
+    request: ScheduledEvent,
+  ) => Promise<void>;
+  initChild: (context: ObjectContext, request: InitRequest) => Promise<void>;
+  cleanupState: (context: ObjectContext) => Promise<void>;
 };
 
 /** A reference to this virtual object's definition, used to build clients. */

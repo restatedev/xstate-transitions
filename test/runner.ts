@@ -19,6 +19,7 @@ import { type AnyEventObject } from "xstate";
 import { createMachineObject } from "../src";
 import type { MachineVirtualObject } from "../src";
 import { type MachineObjectOptions } from "../src";
+import type { Condition } from "../src";
 
 export type RunMachineOptions = {
   machine: AnyStateMachine;
@@ -37,7 +38,7 @@ export type RunningMachine<SnapshotType> = {
   send: (event: AnyEventObject) => Promise<void>;
   snapshot(): Promise<SnapshotType>;
   waitFor(
-    condition: string,
+    condition: Condition,
     event?: AnyEventObject,
     timeout?: number,
   ): Promise<SnapshotType>;
@@ -80,14 +81,14 @@ export async function createRestateTestActor<SnapshotType>(
       },
 
       waitFor: async (
-        condition: string,
+        condition: Condition,
         event?: AnyEventObject,
         timeout?: number,
       ) => {
         return (await client.waitFor({
           condition,
-          event,
-          timeout,
+          ...(event === undefined ? {} : { event }),
+          ...(timeout === undefined ? {} : { timeout }),
         })) as SnapshotType;
       },
 

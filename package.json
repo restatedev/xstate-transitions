@@ -7,7 +7,7 @@
     "dev": "tsx --watch ./src/example.ts",
     "test": "vitest --run",
     "test:unit": "vitest --run test/unit",
-    "typecheck": "tsc --noEmit -p .",
+    "typecheck": "tsc --noEmit -p . && tsc -p tsconfig.test.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -22,7 +22,7 @@
   "packageManager": "pnpm@10.12.4",
   "dependencies": {
     "@restatedev/restate-sdk": "^1.16.1",
-    "xstate": "^5.32.4"
+    "xstate": "5.32.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

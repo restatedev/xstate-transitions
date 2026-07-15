@@ -40,7 +40,9 @@ export function resolveReferencedActor(
   if (!match) {
     return machine.implementations.actors[src];
   }
-  const [, indexStr, nodeId] = match;
+  const indexStr = match[1];
+  const nodeId = match[2];
+  if (indexStr === undefined || nodeId === undefined) return undefined;
   const node = machine.getStateNodeById(nodeId);
   const invokeConfig = node.config.invoke;
   if (invokeConfig === undefined) return undefined;

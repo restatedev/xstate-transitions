@@ -4,7 +4,7 @@ import { buildRegistry } from "../xstate/registry";
 import { fromStored, toReturnedSnapshot } from "../xstate/snapshot";
 import { evaluateCondition, isValidCondition } from "../xstate/conditions";
 import { initialStep, resumeStep } from "../xstate/interpret";
-import type { ReturnedSnapshot, Step } from "../xstate/types";
+import type { ReturnedSnapshot, Step, StoredState } from "../xstate/types";
 import {
   selfDef,
   sendClient,
@@ -84,21 +84,30 @@ export function createMachineObject<
 ): restate.VirtualObjectDefinition<P, MachineVirtualObject<M>> {
   const registry = buildRegistry(machine);
   const self = selfDef(name);
-  const finalStateTTL = options?.finalStateTTL;
+  const { finalStateTTL, ...objectOptions } = options ?? {};
+  validateFinalStateTTL(finalStateTTL);
 
   function getMachine(id: string | null): AnyStateMachine {
-    return (id != null ? registry.get(id) : undefined) ?? machine;
+    if (id == null) return machine;
+    const registered = registry.get(id);
+    if (registered !== undefined) return registered;
+    throw new restate.TerminalError(
+      `No machine with id "${id}" is registered for this object.`,
+      { errorCode: 500 },
+    );
   }
 
   async function buildHandlerContext(
     context: restate.ObjectContext,
   ): Promise<HandlerContext> {
+    const parentKey = await getParentKey(context);
+    const invokeId = await getInvokeId(context);
     return {
       ctx: context,
       self,
-      parentKey: (await getParentKey(context)) ?? undefined,
-      invokeId: (await getInvokeId(context)) ?? undefined,
-      finalStateTTL,
+      ...(parentKey === null ? {} : { parentKey }),
+      ...(invokeId === null ? {} : { invokeId }),
+      ...(finalStateTTL === undefined ? {} : { finalStateTTL }),
     };
   }
 
@@ -173,7 +182,7 @@ export function createMachineObject<
 
       send: async (context: restate.ObjectContext, event: EventFrom<M>) => {
         await validateNotDisposed(context);
-        await validateExists(context);
+        await getRequiredState(context);
         await applyEvent(context, event);
       },
 
@@ -215,9 +224,8 @@ export function createMachineObject<
         context: restate.ObjectContext,
       ): Promise<ReturnedSnapshot> => {
         await validateNotDisposed(context);
-        await validateExists(context);
+        const stored = await getRequiredState(context);
         const instanceMachine = getMachine(await getMachineId(context));
-        const stored = (await getState(context))!;
         return toReturnedSnapshot(fromStored(instanceMachine, stored));
       },
 
@@ -226,11 +234,10 @@ export function createMachineObject<
         request: SubscribeRequest,
       ) => {
         await validateNotDisposed(context);
-        await validateExists(context);
+        const stored = await getRequiredState(context);
         validateCondition(request.condition);
 
         const instanceMachine = getMachine(await getMachineId(context));
-        const stored = (await getState(context))!;
         const returned = toReturnedSnapshot(
           fromStored(instanceMachine, stored),
         );
@@ -262,7 +269,7 @@ export function createMachineObject<
           request: WaitForRequest<M>,
         ): Promise<ReturnedSnapshot> => {
           await validateNotDisposed(context);
-          await validateExists(context);
+          await getRequiredState(context);
           validateCondition(request.condition);
 
           const { id, promise } = context.awakeable<ReturnedSnapshot>();
@@ -296,7 +303,7 @@ export function createMachineObject<
         },
       ),
     } satisfies MachineVirtualObject<M>,
-    options,
+    options: objectOptions,
   });
 }
 
@@ -317,15 +324,15 @@ async function validateNotDisposed(
 }
 
 /** Reject (404) when a handler is called before `create`. */
-async function validateExists(
+async function getRequiredState(
   context: restate.ObjectSharedContext,
-): Promise<void> {
-  if ((await getState(context)) == null) {
-    throw new restate.TerminalError(
-      "No state machine found for this workflow ID. Call 'create' first.",
-      { errorCode: 404 },
-    );
-  }
+): Promise<StoredState> {
+  const stored = await getState(context);
+  if (stored !== null) return stored;
+  throw new restate.TerminalError(
+    "No state machine found for this workflow ID. Call 'create' first.",
+    { errorCode: 404 },
+  );
 }
 
 /** Reject (400) an unsupported wait condition. */
@@ -334,5 +341,12 @@ function validateCondition(condition: string): void {
     throw new restate.TerminalError("Invalid subscription condition", {
       errorCode: 400,
     });
+  }
+}
+
+function validateFinalStateTTL(value: number | undefined): void {
+  if (value === undefined) return;
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError("finalStateTTL must be a finite, non-negative number");
   }
 }

@@ -234,9 +234,7 @@ describe("temporary adversarial probes", () => {
     expect(next).toMatchObject({ status: "done", value: "matched" });
   });
 
-  it("KNOWN LIMITATION: machine ids must be unique across the tree", () => {
-    // The registry keys machines by id; a child sharing the root's id collides.
-    // The root is visited first and wins. Machine ids are expected to be unique.
+  it("rejects duplicate machine ids instead of silently running the wrong machine", () => {
     const child = createMachine({
       id: "duplicate",
       initial: "child",
@@ -247,8 +245,9 @@ describe("temporary adversarial probes", () => {
       initial: "parent",
       states: { parent: { invoke: { id: "kid", src: "child" } } },
     });
-    const registry = buildRegistry(parent);
-    expect(registry.get("duplicate")).toBe(parent);
+    expect(() => buildRegistry(parent)).toThrow(
+      'Machine id "duplicate" is used by more than one machine',
+    );
   });
 
   it("shows that exiting an invoke emits the currently ignored stopChild action", () => {
@@ -268,8 +267,11 @@ describe("temporary adversarial probes", () => {
     const [, actions] = transition(parent, snapshot, {
       type: "CANCEL",
     } as never);
-    expect(actions.some((action) => action.type === "xstate.stopChild")).toBe(
-      true,
-    );
+    expect(
+      actions.some(
+        (action) =>
+          (action as unknown as { type: string }).type === "xstate.stopChild",
+      ),
+    ).toBe(true);
   });
 });

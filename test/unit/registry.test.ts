@@ -59,4 +59,25 @@ describe("buildRegistry", () => {
       "root",
     ]);
   });
+
+  it("allows the same machine instance to be registered under multiple actor names", () => {
+    const child = createMachine({ id: "child" });
+    const root = setup({
+      actors: { first: child, second: child },
+    }).createMachine({ id: "root" });
+
+    expect(buildRegistry(root).get("child")).toBe(child);
+  });
+
+  it("rejects distinct machines with the same id", () => {
+    const first = createMachine({ id: "duplicate" });
+    const second = createMachine({ id: "duplicate" });
+    const root = setup({ actors: { first, second } }).createMachine({
+      id: "root",
+    });
+
+    expect(() => buildRegistry(root)).toThrow(
+      'Machine id "duplicate" is used by more than one machine',
+    );
+  });
 });

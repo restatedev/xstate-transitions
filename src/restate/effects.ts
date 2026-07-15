@@ -106,6 +106,14 @@ export async function executeEffects(
         });
         break;
       }
+      case "stopChild": {
+        const child = children[effect.childId];
+        if (!child) break;
+        delete children[effect.childId];
+        childrenChanged = true;
+        sendClient(ctx, self, child.key).cleanupState();
+        break;
+      }
       case "send": {
         const key = resolveTarget(handler, effect.target, children);
         if (key) sendClient(ctx, self, key).send(effect.event);
@@ -115,14 +123,15 @@ export async function executeEffects(
         const key = resolveTarget(handler, effect.target, children);
         if (!key) break;
         const uuid = ctx.rand.uuidv4();
-        scheduled[effect.sendId] = {
+        const sendId = effect.sendId ?? uuid;
+        scheduled[sendId] = {
           uuid,
           targetKey: key,
           event: effect.event,
         };
         scheduledChanged = true;
         sendClient(ctx, self, ctx.key).deliverScheduled(
-          { sendId: effect.sendId, uuid },
+          { sendId, uuid },
           restate.rpc.sendOpts({ delay: effect.delay }),
         );
         break;
@@ -134,11 +143,17 @@ export async function executeEffects(
         }
         break;
       }
+      default:
+        assertNever(effect);
     }
   }
 
   if (scheduledChanged) setScheduled(ctx, scheduled);
   if (childrenChanged) setChildren(ctx, children);
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unsupported effect: ${JSON.stringify(value)}`);
 }
 
 /** Resolve/reject awakeables whose condition is now decided by the snapshot. */

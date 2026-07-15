@@ -1,4 +1,9 @@
-import type { AnyStateMachine, AnyMachineSnapshot, SnapshotFrom } from "xstate";
+import type {
+  AnyStateMachine,
+  AnyMachineSnapshot,
+  SnapshotFrom,
+  SnapshotStatus,
+} from "xstate";
 import type { StoredState, ReturnedSnapshot } from "./types";
 
 // A raw xstate snapshot exposes more than we persist, and its `historyValue`
@@ -7,7 +12,7 @@ import type { StoredState, ReturnedSnapshot } from "./types";
 interface RawSnapshot {
   value: unknown;
   context: unknown;
-  status: string;
+  status: SnapshotStatus;
   output?: unknown;
   error?: unknown;
   historyValue?: Record<string, { id: string }[]>;

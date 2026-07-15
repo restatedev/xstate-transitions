@@ -1,4 +1,4 @@
-import type { AnyEventObject } from "xstate";
+import type { AnyEventObject, SnapshotStatus } from "xstate";
 
 // ---------------------------------------------------------------------------
 // Shared types for the pure (Restate-free) layer. Kept in one self-contained
@@ -14,7 +14,7 @@ import type { AnyEventObject } from "xstate";
 export interface StoredState {
   value: unknown;
   context: unknown;
-  status: string;
+  status: SnapshotStatus;
   output?: unknown;
   error?: unknown;
   historyValue: Record<string, string[]>;
@@ -24,7 +24,7 @@ export interface StoredState {
 export interface ReturnedSnapshot {
   value: unknown;
   context: unknown;
-  status: string;
+  status: SnapshotStatus;
   output?: unknown;
   error?: unknown;
   tags: string[];
@@ -46,7 +46,7 @@ export type ConditionOutcome =
  */
 export interface Action {
   type: string;
-  params: Record<string, unknown>;
+  params: unknown;
 }
 
 /** Where a routed event is delivered. */
@@ -68,10 +68,12 @@ export interface SpawnParams {
 export type Effect =
   | { kind: "runPromise"; params: SpawnParams }
   | { kind: "startChild"; childId: string; machineId: string; input: unknown }
+  | { kind: "stopChild"; childId: string }
   | { kind: "send"; target: Target; event: AnyEventObject }
   | {
       kind: "scheduleSend";
-      sendId: string;
+      /** Explicit XState id, if supplied. The effect runner generates one otherwise. */
+      sendId?: string;
       target: Target;
       event: AnyEventObject;
       delay: number;

@@ -13,10 +13,8 @@ export default tseslint.config(
       globals: { ...globals.node },
     },
     rules: {
-      // The xstate<->restate bridge legitimately needs `any`/non-null casts;
-      // strict `tsc` is the real type-safety net here.
-      "@typescript-eslint/no-explicit-any": "off",
-      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/no-explicit-any": "error",
+      "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
@@ -32,6 +30,8 @@ export default tseslint.config(
     // Tests exercise internals with casts and probes.
     files: ["test/**/*.ts"],
     rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/no-unsafe-function-type": "off",
     },
   },

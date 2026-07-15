@@ -29,7 +29,14 @@ export function buildRegistry(
   const registry = new Map<string, AnyStateMachine>();
 
   const visit = (m: AnyStateMachine) => {
-    if (registry.has(m.id)) return;
+    const existing = registry.get(m.id);
+    if (existing === m) return;
+    if (existing !== undefined) {
+      throw new Error(
+        `Machine id "${m.id}" is used by more than one machine. ` +
+          "Every machine in a durable actor tree must have a unique id.",
+      );
+    }
     registry.set(m.id, m);
 
     const actors = (m.implementations?.actors ?? {}) as Record<string, unknown>;

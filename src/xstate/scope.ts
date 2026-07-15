@@ -21,9 +21,15 @@ import type { Action } from "./types";
 export const PARENT_ID = "#_parent";
 
 /** The subset of a live actor we mutate/read when building a parent-aware scope. */
+interface MutableActorSystem {
+  _sendInspectionEvent: () => void;
+  _unregister: (actor: unknown) => void;
+  getAll: () => Record<string, unknown>;
+}
+
 interface MutableActor {
   _parent: unknown;
-  system: { _sendInspectionEvent: () => void };
+  system: MutableActorSystem;
 }
 
 /** The inert actor scope xstate's transition functions expect. */
@@ -95,6 +101,14 @@ function parentScope(
 ): ActorScope {
   const self = createActor(machine) as unknown as MutableActor;
   self._parent = FAKE_PARENT;
+  // createActor eagerly computes an initial snapshot. Actors with a systemId
+  // are registered during that construction, then registered again when we
+  // explicitly call getInitialSnapshot/transition below. XState's own inert
+  // scope replaces the system for the same reason; removing the eager entries
+  // gives this parent-aware scope equivalent isolation.
+  for (const actor of Object.values(self.system.getAll())) {
+    self.system._unregister(actor);
+  }
   self.system._sendInspectionEvent = () => {};
   return {
     self,

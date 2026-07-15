@@ -12,7 +12,7 @@ importers:
         specifier: ^1.16.1
         version: 1.16.1
       xstate:
-        specifier: ^5.32.4
+        specifier: 5.32.4
         version: 5.32.4
     devDependencies:
       '@eslint/js':

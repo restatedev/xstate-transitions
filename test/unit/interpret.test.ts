@@ -90,6 +90,53 @@ describe("initialStep()", () => {
     });
   });
 
+  it("carries assign-spawn input into the startChild effect", () => {
+    const child = createMachine({ id: "child" });
+    const parent = setup({ actors: { child } }).createMachine({
+      id: "parent",
+      context: { child: undefined as unknown },
+      entry: assign({
+        child: ({ spawn }) =>
+          spawn("child", { id: "kid", input: { answer: 42 } }),
+      }),
+    });
+
+    expect(
+      byKind(initialStep(parent, { isChild: false }).effects, "startChild"),
+    ).toEqual([
+      {
+        kind: "startChild",
+        childId: "kid",
+        machineId: "child",
+        input: { answer: 42 },
+      },
+    ]);
+  });
+
+  it("runs a promise actor spawned inside assign", () => {
+    const work = fromPromise(async ({ input }: { input: { answer: number } }) =>
+      Promise.resolve(input.answer),
+    );
+    const parent = setup({ actors: { work } }).createMachine({
+      id: "parent",
+      context: { work: undefined as unknown },
+      entry: assign({
+        work: ({ spawn }) =>
+          spawn("work", { id: "work", input: { answer: 42 } }),
+      }),
+    });
+
+    const effects = byKind(
+      initialStep(parent, { isChild: false }).effects,
+      "runPromise",
+    );
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({
+      kind: "runPromise",
+      params: { id: "work", src: "work", input: { answer: 42 } },
+    });
+  });
+
   it("emits two runPromise effects for two parallel invokes", () => {
     const machine = setup({
       actors: {
@@ -106,6 +153,23 @@ describe("initialStep()", () => {
     });
     const result = initialStep(machine, { isChild: false });
     expect(byKind(result.effects, "runPromise")).toHaveLength(2);
+  });
+
+  it("isolates systemId registrations in the parent-aware child scope", () => {
+    const grandchild = createMachine({ id: "grandchild" });
+    const child = setup({ actors: { grandchild } }).createMachine({
+      id: "child",
+      invoke: {
+        src: "grandchild",
+        id: "grandchild",
+        systemId: "unique-grandchild",
+      },
+    });
+
+    expect(() => initialStep(child, { isChild: true })).not.toThrow();
+    expect(
+      byKind(initialStep(child, { isChild: true }).effects, "startChild"),
+    ).toMatchObject([{ childId: "grandchild", machineId: "grandchild" }]);
   });
 });
 
@@ -156,6 +220,60 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "TICK" },
       delay: 100,
     });
+  });
+
+  it("schedules an explicitly zero-delay raise instead of dropping it", () => {
+    const zeroDelayMachine = createMachine({
+      id: "zero-delay",
+      on: {
+        START: {
+          actions: raise({ type: "TICK" }, { delay: 0, id: "zero" }),
+        },
+      },
+    });
+    const created = initialStep(zeroDelayMachine, { isChild: false });
+    const result = resumeStep(zeroDelayMachine, {
+      stored: created.nextState,
+      event: { type: "START" },
+      isChild: false,
+      knownChildIds: [],
+    });
+
+    expect(byKind(result.effects, "scheduleSend")).toEqual([
+      {
+        kind: "scheduleSend",
+        sendId: "zero",
+        target: { type: "self" },
+        event: { type: "TICK" },
+        delay: 0,
+      },
+    ]);
+  });
+
+  it("routes sendTo(self) without mistaking the actor ref for a child", () => {
+    const selfSendingMachine = createMachine({
+      id: "self-send",
+      entry: sendTo(
+        ({ self }) => self,
+        { type: "PING" },
+        { delay: 10, id: "self-delay" },
+      ),
+    });
+
+    expect(
+      byKind(
+        initialStep(selfSendingMachine, { isChild: false }).effects,
+        "scheduleSend",
+      ),
+    ).toEqual([
+      {
+        kind: "scheduleSend",
+        sendId: "self-delay",
+        target: { type: "self" },
+        event: { type: "PING" },
+        delay: 10,
+      },
+    ]);
   });
 
   it("emits cancel for cancel(id)", () => {
@@ -259,6 +377,64 @@ describe("resumeStep() — events and routing", () => {
       knownChildIds: ["kid"],
     });
     expect(byKind(resumed.effects, "startChild")).toHaveLength(0);
+    expect(byKind(resumed.effects, "runPromise")).toHaveLength(0);
+  });
+
+  it("stops a persisted machine child when its invoke is exited", () => {
+    const child = createMachine({ id: "child" });
+    const parent = setup({ actors: { child } }).createMachine({
+      id: "parent",
+      initial: "running",
+      states: {
+        running: {
+          invoke: { src: "child", id: "kid" },
+          on: { CANCEL: "idle" },
+        },
+        idle: {},
+      },
+    });
+    const created = initialStep(parent, { isChild: false });
+    const stopped = resumeStep(parent, {
+      stored: created.nextState,
+      event: { type: "CANCEL" },
+      isChild: false,
+      knownChildIds: ["kid"],
+    });
+
+    expect(byKind(stopped.effects, "stopChild")).toEqual([
+      { kind: "stopChild", childId: "kid" },
+    ]);
+  });
+
+  it("stops then restarts a re-entered invoke with the same child id", () => {
+    const child = createMachine({ id: "child" });
+    const parent = setup({ actors: { child } }).createMachine({
+      id: "parent",
+      initial: "running",
+      states: {
+        running: {
+          invoke: { src: "child", id: "kid", input: { generation: 2 } },
+          on: { REENTER: { target: "running", reenter: true } },
+        },
+      },
+    });
+    const created = initialStep(parent, { isChild: false });
+    const reentered = resumeStep(parent, {
+      stored: created.nextState,
+      event: { type: "REENTER" },
+      isChild: false,
+      knownChildIds: ["kid"],
+    });
+
+    expect(reentered.effects.slice(0, 2)).toEqual([
+      { kind: "stopChild", childId: "kid" },
+      {
+        kind: "startChild",
+        childId: "kid",
+        machineId: "child",
+        input: { generation: 2 },
+      },
+    ]);
   });
 });
 

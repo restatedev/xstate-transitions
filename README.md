@@ -5,7 +5,7 @@
 This is an experiment to use the pure transition api with restate,
 as described here https://stately.ai/docs/machines#transitioning-state
 
-This largely following this structure from here:
+This largely follows this structure:
 
 https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570
 
@@ -31,7 +31,8 @@ snapshot (persisted history-safely). On top of the pure transition core it
 supports:
 
 - **Promise actors** with an injected Restate `ctx` (`fromPromise` from
-  [`src/promise.ts`](src/promise.ts) → `ctx.run` / `ctx.date` / `ctx.rand`);
+  [`src/restate/promise.ts`](src/restate/promise.ts) → `ctx.run` / `ctx.date` /
+  `ctx.rand`);
   transient errors are retried by Restate, `TerminalError` routes to `onError`.
 - **Delayed transitions** (`after`) and delayed events, with **cancellation**
   (`cancel(id)`), via guarded Restate delayed self-sends.

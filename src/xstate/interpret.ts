@@ -43,7 +43,7 @@ import { isMachine } from "./registry";
  */
 export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
   const [snapshot, actions] = runInitial(machine, input.input, input.isChild);
-  return finish(snapshot, actions, []);
+  return finish(machine, snapshot, actions, []);
 }
 
 /**
@@ -68,7 +68,7 @@ export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
     input.event,
     input.isChild,
   );
-  return finish(next, actions, input.knownChildIds);
+  return finish(machine, next, actions, input.knownChildIds);
 }
 
 // ===========================================================================
@@ -79,7 +79,7 @@ export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
 // views describe the fields we read, narrowed once per case rather than inline.
 interface RaiseParams {
   event: AnyEventObject;
-  id: string;
+  id?: string;
   delay?: number;
 }
 interface SendToParams extends RaiseParams {
@@ -91,15 +91,20 @@ interface CancelParams {
 }
 /** A child entry as it appears on a snapshot's `children` map. */
 interface ChildRef {
+  id?: string;
   logic?: unknown;
+  src?: unknown;
+  options?: { input?: unknown };
 }
 /** A `sendTo` target given as an actor ref rather than a string id. */
 interface RefLike {
   id?: string;
+  logic?: unknown;
 }
 
 /** Build the shared result shape for both entrypoints. */
 function finish(
+  machine: AnyStateMachine,
   snapshot: AnyMachineSnapshot,
   actions: Action[],
   knownChildIds: readonly string[],
@@ -107,7 +112,7 @@ function finish(
   return {
     nextState: toStored(snapshot),
     returned: toReturnedSnapshot(snapshot),
-    effects: interpretActions(snapshot, actions, knownChildIds),
+    effects: interpretActions(machine, snapshot, actions, knownChildIds),
   };
 }
 
@@ -124,102 +129,169 @@ function injectStubChildren(
 }
 
 function interpretActions(
+  machine: AnyStateMachine,
   snapshot: AnyMachineSnapshot,
   actions: Action[],
   knownChildIds: readonly string[],
 ): Effect[] {
-  const started = new Set(knownChildIds);
-  const effects = startChildEffects(snapshot, actions, started);
+  const activeChildren = new Set(knownChildIds);
+  const effects = stopChildEffects(actions, activeChildren);
+  effects.push(...startActorEffects(snapshot, actions, activeChildren));
   for (const action of actions) {
-    const effect = toEffect(action, started);
+    const effect = toEffect(machine, action, activeChildren);
     if (effect) effects.push(effect);
   }
   return effects;
 }
 
-/** Collect the child MACHINE actors to start (both invoke and assign-spawn). */
-function startChildEffects(
+/** Stop persisted machine children before considering starts in the next snapshot. */
+function stopChildEffects(
+  actions: Action[],
+  activeChildren: Set<string>,
+): Effect[] {
+  const effects: Effect[] = [];
+  for (const action of actions) {
+    if (action.type !== "xstate.stopChild") continue;
+    const childId = refId(action.params);
+    if (childId === undefined || !activeChildren.delete(childId)) continue;
+    effects.push({ kind: "stopChild", childId });
+  }
+  return effects;
+}
+
+/** Collect newly spawned actors, including assign-spawn (which emits no action). */
+function startActorEffects(
   snapshot: AnyMachineSnapshot,
   actions: Action[],
-  started: Set<string>,
+  activeChildren: Set<string>,
 ): Effect[] {
-  const spawnInputs = new Map<string, unknown>();
+  const spawnParams = new Map<string, SpawnParams>();
   for (const action of actions) {
     if (action.type === "xstate.spawnChild") {
       const params = action.params as SpawnParams;
-      spawnInputs.set(params.id, params.input);
+      spawnParams.set(params.id, params);
     }
   }
 
   const effects: Effect[] = [];
-  for (const [childId, ref] of Object.entries(snapshot.children)) {
-    if (started.has(childId)) continue;
-    const logic = (ref as ChildRef | undefined)?.logic;
-    if (!isMachine(logic)) continue;
-    started.add(childId);
-    effects.push({
-      kind: "startChild",
-      childId,
-      machineId: logic.id,
-      input: spawnInputs.get(childId),
-    });
+  for (const [childId, value] of Object.entries(snapshot.children)) {
+    const ref = value as ChildRef | undefined;
+    const logic = ref?.logic;
+    const params = spawnParams.get(childId);
+    const input = params ? params.input : ref?.options?.input;
+
+    if (isMachine(logic)) {
+      if (!activeChildren.has(childId)) {
+        effects.push({
+          kind: "startChild",
+          childId,
+          machineId: logic.id,
+          input,
+        });
+      }
+      activeChildren.add(childId);
+      continue;
+    }
+
+    // XState does not emit xstate.spawnChild when spawn() is used inside
+    // assign(). Reconstruct the request from the live ref before it is removed
+    // by snapshot serialization.
+    if (!params && ref && (ref.src !== undefined || logic !== undefined)) {
+      effects.push({
+        kind: "runPromise",
+        params: {
+          id: childId,
+          src: ref.src ?? logic,
+          input,
+        },
+      });
+    }
   }
   return effects;
 }
 
 /** Translate one executable action into an Effect (or none). */
 function toEffect(
+  machine: AnyStateMachine,
   action: Action,
-  started: ReadonlySet<string>,
+  activeChildren: ReadonlySet<string>,
 ): Effect | undefined {
   switch (action.type) {
     case "xstate.spawnChild": {
       const params = action.params as SpawnParams;
       // machine children are started separately; only promise/plain actors here
-      return started.has(params.id)
+      return activeChildren.has(params.id)
         ? undefined
         : { kind: "runPromise", params };
     }
     case "xstate.raise": {
-      const { event, id, delay } = action.params as unknown as RaiseParams;
-      // zero-delay raises are already drained inside the macrostep
-      return delay
+      const { event, id, delay } = action.params as RaiseParams;
+      // A raise without a delay is drained inside the macrostep. An explicit
+      // delay of zero is still scheduled by XState and must not be dropped.
+      return delay !== undefined
         ? scheduleSend(id, { type: "self" }, event, delay)
         : undefined;
     }
     case "xstate.sendTo": {
-      const params = action.params as unknown as SendToParams;
-      const target = targetOf(params);
+      const params = action.params as SendToParams;
+      const target = targetOf(machine, params, activeChildren);
       if (!target) return undefined;
-      return params.delay
+      return params.delay !== undefined
         ? scheduleSend(params.id, target, params.event, params.delay)
         : { kind: "send", target, event: params.event };
     }
     case "xstate.cancel": {
-      const { sendId } = action.params as unknown as CancelParams;
+      const { sendId } = action.params as CancelParams;
       return { kind: "cancel", sendId };
     }
+    case "xstate.stopChild":
+      return undefined;
     default:
       return undefined;
   }
 }
 
 function scheduleSend(
-  sendId: string,
+  sendId: string | undefined,
   target: Target,
   event: AnyEventObject,
   delay: number,
 ): Effect {
-  return { kind: "scheduleSend", sendId, target, event, delay };
+  return {
+    kind: "scheduleSend",
+    ...(sendId === undefined ? {} : { sendId }),
+    target,
+    event,
+    delay,
+  };
 }
 
-function targetOf(params: SendToParams): Target | undefined {
+function targetOf(
+  machine: AnyStateMachine,
+  params: SendToParams,
+  activeChildren: ReadonlySet<string>,
+): Target | undefined {
   const to = params.to;
-  const targetId =
-    params.targetId ??
-    (typeof to === "string" ? to : (to as RefLike | undefined)?.id);
-  if (targetId === undefined) return undefined;
-  return targetId === PARENT_ID
-    ? { type: "parent" }
-    : { type: "child", childId: targetId };
+  if (params.targetId !== undefined) {
+    return params.targetId === PARENT_ID
+      ? { type: "parent" }
+      : { type: "child", childId: params.targetId };
+  }
+  if (typeof to === "string") {
+    return to === PARENT_ID
+      ? { type: "parent" }
+      : { type: "child", childId: to };
+  }
+
+  const ref = to as RefLike | undefined;
+  if (ref?.id !== undefined && activeChildren.has(ref.id)) {
+    return { type: "child", childId: ref.id };
+  }
+  return ref?.logic === machine ? { type: "self" } : undefined;
+}
+
+function refId(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const ref = value as RefLike & { actorRef?: RefLike };
+  return typeof ref.id === "string" ? ref.id : ref.actorRef?.id;
 }

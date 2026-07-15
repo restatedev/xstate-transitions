@@ -1,5 +1,10 @@
 import { createActor, toPromise } from "xstate";
-import type { AnyActorLogic, AnyStateMachine } from "xstate";
+import type {
+  AnyActorLogic,
+  AnyStateMachine,
+  DoneActorEvent,
+  ErrorActorEvent,
+} from "xstate";
 import * as restate from "@restatedev/restate-sdk";
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
 import {
@@ -23,7 +28,7 @@ export async function runActor(
   machine: AnyStateMachine,
   params: SpawnParams,
   ctx: ObjectSharedContext,
-) {
+): Promise<DoneActorEvent | ErrorActorEvent> {
   const logic =
     typeof params.src === "string"
       ? resolveReferencedActor(machine, params.src)
