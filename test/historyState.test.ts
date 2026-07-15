@@ -7,8 +7,8 @@
  * stateless round-trip.
  */
 
-import { describe, it, expect } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it, expect } from "vitest";
+import { describeE2E } from "./harness";
 import { createMachine } from "xstate";
 import { eventually } from "./eventually.js";
 
@@ -29,12 +29,12 @@ const machine = createMachine({
   },
 });
 
-describe("History state persistence", () => {
+describeE2E("History state persistence", (createActor) => {
   it(
     "restores the remembered sub-state after RESUME",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{ value?: unknown }>({
+      using actor = await createActor<{ value?: unknown }>({
         machine,
       });
 

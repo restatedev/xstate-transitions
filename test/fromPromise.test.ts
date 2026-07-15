@@ -17,8 +17,8 @@
  * target shape and only type-checks against the future module.
  */
 
-import { describe, expect, it, vi } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { expect, it, vi } from "vitest";
+import { describeE2E } from "./harness";
 import { fromPromise } from "../src";
 import { setup } from "xstate";
 import { eventually } from "./eventually.js";
@@ -57,15 +57,13 @@ const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
     },
   });
 
-describe("A Restate-aware fromPromise state machine", () => {
+describeE2E("A Restate-aware fromPromise state machine", (createActor) => {
   it(
     "should run the promise actor with restate context",
     { timeout: 20_000 },
     async () => {
       const sendEmail = vi.fn<(customer: string) => Promise<void>>();
-      using actor = await createRestateTestActor<
-        { status?: string } | undefined
-      >({
+      using actor = await createActor<{ status?: string } | undefined>({
         machine: machineFactory(sendEmail),
         input: { customer: "bob@mop.com" },
       });
@@ -88,9 +86,7 @@ describe("A Restate-aware fromPromise state machine", () => {
         .mockRejectedValueOnce(new Error("Fail to send email"))
         .mockRejectedValueOnce(new Error("Fail to send email"))
         .mockResolvedValue(undefined);
-      using actor = await createRestateTestActor<
-        { status?: string } | undefined
-      >({
+      using actor = await createActor<{ status?: string } | undefined>({
         machine: machineFactory(sendEmail),
         input: { customer: "bob@mop.com" },
       });
@@ -111,9 +107,7 @@ describe("A Restate-aware fromPromise state machine", () => {
       const sendEmail = vi
         .fn<(customer: string) => Promise<void>>()
         .mockRejectedValueOnce(new TerminalError("Fail to send email"));
-      using actor = await createRestateTestActor<
-        { status?: string } | undefined
-      >({
+      using actor = await createActor<{ status?: string } | undefined>({
         machine: machineFactory(sendEmail),
         input: { customer: "bob@mop.com" },
       });

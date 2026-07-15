@@ -84,7 +84,7 @@ export type MachineDefinition = VirtualObjectDefinition<
 >;
 
 /** The bundle of state an effect executor needs to act against Restate. */
-export interface HandlerCtx {
+export interface HandlerContext {
   ctx: ObjectContext;
   self: MachineDefinition;
   /** Set only for a child instance: the parent's object key. */

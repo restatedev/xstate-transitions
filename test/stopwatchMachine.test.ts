@@ -9,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import { assign, setup, fromCallback } from "xstate";
 import { eventually } from "./eventually.js";
@@ -65,12 +65,12 @@ export const stopwatchMachine = setup({
 // <!> This test is currently disabled as we do not have a support for `fromCallback`.
 // Use cases that require `fromCallback` needed to implement in a different way.
 // for example, externally sending events to the machine (instead of internally via fromCallback)
-describe("A stopwatch machine", () => {
+describeE2E("A stopwatch machine", (createActor) => {
   it(
     "Will complete successfully",
     { skip: true, timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<
+      using actor = await createActor<
         { context?: { elapsed?: number } } | undefined
       >({
         machine: stopwatchMachine,

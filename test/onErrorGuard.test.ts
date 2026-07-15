@@ -7,8 +7,8 @@
  * serializes to {} and the guard would fall through.
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 import { fromPromise, setup } from "xstate";
 import { eventually } from "./eventually.js";
 
@@ -43,12 +43,12 @@ const machine = setup({
   },
 });
 
-describe("onError guard on event.error.message", () => {
+describeE2E("onError guard on event.error.message", (createActor) => {
   it(
     "selects the branch matching the normalized error message",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{
+      using actor = await createActor<{
         status?: string;
         value?: string;
       }>({ machine });

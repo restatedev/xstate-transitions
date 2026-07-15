@@ -25,6 +25,11 @@ export type RunMachineOptions = {
   key?: string;
   input?: unknown;
   options?: MachineObjectOptions;
+  /**
+   * Force restate-server to always replay at suspension points, surfacing any
+   * non-determinism in the handlers. Set by the parameterized e2e harness.
+   */
+  alwaysReplay?: boolean;
 };
 
 export type RunningMachine<SnapshotType> = {
@@ -42,11 +47,9 @@ export type RunningMachine<SnapshotType> = {
 export async function createRestateTestActor<SnapshotType>(
   opts: RunMachineOptions,
 ): Promise<RunningMachine<SnapshotType>> {
+  const obj = createMachineObject("default", opts.machine, opts.options);
   const env = await RestateTestEnvironment.start(
-    (restateServer) => {
-      const obj = createMachineObject("default", opts.machine, opts.options);
-      restateServer.bind(obj);
-    },
+    { services: [obj], alwaysReplay: opts.alwaysReplay ?? false },
     () =>
       new RestateContainer().withEnvironment({
         RESTATE_DEFAULT_NUM_PARTITIONS: "2",

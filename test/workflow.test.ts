@@ -9,10 +9,10 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it } from "vitest";
+import { it } from "vitest";
 
 import { assign, fromPromise, setup } from "xstate";
-import { createRestateTestActor } from "./runner";
+import { describeE2E } from "./harness";
 
 /**
  * Need to make the type inference work for workflow
@@ -114,14 +114,12 @@ export const workflow = setup({
   },
 });
 
-describe("A Temperate workflow", () => {
+describeE2E("A Temperate workflow", (createActor) => {
   it(
     "Will complete the workflow successfully",
     { timeout: 30_000 },
     async () => {
-      using actor = await createRestateTestActor<
-        { status?: string } | undefined
-      >({
+      using actor = await createActor<{ status?: string } | undefined>({
         machine: workflow,
       });
 

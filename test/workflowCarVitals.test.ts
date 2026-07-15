@@ -9,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import { createMachine, assign, type SnapshotFrom, fromPromise } from "xstate";
 import { eventually } from "./eventually.js";
@@ -126,11 +126,9 @@ const vitalsWorkflow = createMachine(
   },
 );
 
-describe("A car vitals workflow", () => {
+describeE2E("A car vitals workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-    using actor = await createRestateTestActor<
-      SnapshotFrom<typeof vitalsWorkflow>
-    >({
+    using actor = await createActor<SnapshotFrom<typeof vitalsWorkflow>>({
       machine: vitalsWorkflow,
     });
 

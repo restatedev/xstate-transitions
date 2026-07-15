@@ -15,8 +15,8 @@
  * so vanilla fromPromise is fine.
  */
 
-import { describe, expect, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { expect, it } from "vitest";
+import { describeE2E } from "./harness";
 import { fromPromise, setup, assign } from "xstate";
 
 interface Customer {
@@ -116,13 +116,11 @@ const workflow = setup({
   output: ({ context }) => ({ decision: context.creditCheck?.decision }),
 });
 
-describe("A credit check workflow", () => {
+describeE2E("A credit check workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-    using wf = await createRestateTestActor<{ output?: { decision?: string } }>(
-      {
-        machine: workflow,
-      },
-    );
+    using wf = await createActor<{ output?: { decision?: string } }>({
+      machine: workflow,
+    });
 
     const customer: Customer = {
       id: "customer123",

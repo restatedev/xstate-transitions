@@ -8,8 +8,8 @@
  * deliberate decision, not an accident.
  */
 
-import { describe, it, expect } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it, expect } from "vitest";
+import { describeE2E } from "./harness";
 import { assign, createMachine } from "xstate";
 
 const counter = createMachine({
@@ -26,12 +26,12 @@ const counter = createMachine({
   },
 });
 
-describe("create() idempotency / re-create", () => {
+describeE2E("create() idempotency / re-create", (createActor) => {
   it(
     "re-creating resets the machine to its initial snapshot",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{
+      using actor = await createActor<{
         context: { count: number };
         value?: string;
       }>({ machine: counter });

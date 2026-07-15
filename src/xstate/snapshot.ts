@@ -41,14 +41,14 @@ function deserializeHistory(
 
 /** Serialize a live snapshot into the persisted form. */
 export function toStored(snapshot: AnyMachineSnapshot): StoredState {
-  const s = asRaw(snapshot);
+  const raw = asRaw(snapshot);
   return {
-    value: s.value,
-    context: s.context,
-    status: s.status,
-    output: s.output,
-    error: s.error,
-    historyValue: serializeHistory(s.historyValue),
+    value: raw.value,
+    context: raw.context,
+    status: raw.status,
+    output: raw.output,
+    error: raw.error,
+    historyValue: serializeHistory(raw.historyValue),
   };
 }
 
@@ -71,15 +71,15 @@ export function fromStored<M extends AnyStateMachine>(
 export function toReturnedSnapshot(
   snapshot: AnyMachineSnapshot,
 ): ReturnedSnapshot {
-  const s = asRaw(snapshot);
-  const tags = s.tags ? [...s.tags] : [];
+  const raw = asRaw(snapshot);
+  const tags = raw.tags ? [...raw.tags] : [];
   tags.sort();
   return {
-    value: s.value,
-    context: s.context,
-    status: s.status,
-    output: s.output,
-    error: s.error,
+    value: raw.value,
+    context: raw.context,
+    status: raw.status,
+    output: raw.output,
+    error: raw.error,
     tags,
   };
 }

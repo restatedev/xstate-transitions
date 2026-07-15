@@ -7,8 +7,8 @@
  * assignments must merge. This locks the shared-handler fan-out + merge.
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 import { assign, fromPromise, setup } from "xstate";
 import { eventually } from "./eventually.js";
 
@@ -66,12 +66,12 @@ const machine = setup({
   },
 });
 
-describe("Concurrent invokes from parallel regions", () => {
+describeE2E("Concurrent invokes from parallel regions", (createActor) => {
   it(
     "runs both invokes concurrently and merges both results",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{
+      using actor = await createActor<{
         status?: string;
         context: { a: string | null; b: string | null };
       }>({ machine });

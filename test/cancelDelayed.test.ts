@@ -7,8 +7,8 @@
  * dropped.
  */
 
-import { describe, it, expect } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it, expect } from "vitest";
+import { describeE2E } from "./harness";
 import { createMachine, raise, cancel } from "xstate";
 import { eventually, wait } from "./eventually.js";
 
@@ -34,12 +34,12 @@ const machine = createMachine({
   },
 });
 
-describe("Delayed-event cancellation", () => {
+describeE2E("Delayed-event cancellation", (createActor) => {
   it(
     "does NOT fire a cancelled delayed raise",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{
+      using actor = await createActor<{
         status?: string;
         value?: string;
       }>({ machine });
@@ -61,7 +61,7 @@ describe("Delayed-event cancellation", () => {
     "DOES fire a non-cancelled delayed raise",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{
+      using actor = await createActor<{
         status?: string;
         value?: string;
       }>({ machine });

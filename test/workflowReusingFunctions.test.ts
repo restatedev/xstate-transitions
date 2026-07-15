@@ -9,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import {
   assign,
@@ -206,11 +206,9 @@ const parentWorkflow = createMachine({
   },
 });
 
-describe("Reusing functions workflow", () => {
+describeE2E("Reusing functions workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-    using actor = await createRestateTestActor<
-      SnapshotFrom<typeof parentWorkflow>
-    >({
+    using actor = await createActor<SnapshotFrom<typeof parentWorkflow>>({
       machine: parentWorkflow,
     });
 

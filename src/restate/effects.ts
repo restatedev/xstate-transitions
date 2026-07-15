@@ -15,7 +15,7 @@ import {
 import type { Effect, Target, ReturnedSnapshot } from "../xstate/types";
 import type {
   MachineDefinition,
-  HandlerCtx,
+  HandlerContext,
   ChildRecord,
   ExecuteRequest,
   ScheduledEvent,
@@ -63,15 +63,15 @@ export function client(
 }
 
 function resolveTarget(
-  h: HandlerCtx,
+  handler: HandlerContext,
   target: Target,
   children: Record<string, ChildRecord>,
 ): string | undefined {
   switch (target.type) {
     case "self":
-      return h.ctx.key;
+      return handler.ctx.key;
     case "parent":
-      return h.parentKey;
+      return handler.parentKey;
     case "child":
       return children[target.childId]?.key;
   }
@@ -79,50 +79,49 @@ function resolveTarget(
 
 /** Execute the abstract effects produced by a pure step against Restate. */
 export async function executeEffects(
-  h: HandlerCtx,
+  handler: HandlerContext,
   effects: Effect[],
 ): Promise<void> {
-  const scheduled = await getScheduled(h.ctx);
-  const children = await getChildren(h.ctx);
+  const { ctx, self } = handler;
+  const scheduled = await getScheduled(ctx);
+  const children = await getChildren(ctx);
   let scheduledChanged = false;
   let childrenChanged = false;
 
   for (const effect of effects) {
     switch (effect.kind) {
       case "runPromise": {
-        sendClient(h.ctx, h.self, h.ctx.key).executeActor({
-          params: effect.params,
-        });
+        sendClient(ctx, self, ctx.key).executeActor({ params: effect.params });
         break;
       }
       case "startChild": {
-        const key = `${h.ctx.key}::${effect.childId}`;
+        const key = `${ctx.key}::${effect.childId}`;
         children[effect.childId] = { key, machineId: effect.machineId };
         childrenChanged = true;
-        sendClient(h.ctx, h.self, key).initChild({
+        sendClient(ctx, self, key).initChild({
           machineId: effect.machineId,
-          parentKey: h.ctx.key,
+          parentKey: ctx.key,
           invokeId: effect.childId,
           input: effect.input,
         });
         break;
       }
       case "send": {
-        const key = resolveTarget(h, effect.target, children);
-        if (key) sendClient(h.ctx, h.self, key).send(effect.event);
+        const key = resolveTarget(handler, effect.target, children);
+        if (key) sendClient(ctx, self, key).send(effect.event);
         break;
       }
       case "scheduleSend": {
-        const key = resolveTarget(h, effect.target, children);
+        const key = resolveTarget(handler, effect.target, children);
         if (!key) break;
-        const uuid = h.ctx.rand.uuidv4();
+        const uuid = ctx.rand.uuidv4();
         scheduled[effect.sendId] = {
           uuid,
           targetKey: key,
           event: effect.event,
         };
         scheduledChanged = true;
-        sendClient(h.ctx, h.self, h.ctx.key).deliverScheduled(
+        sendClient(ctx, self, ctx.key).deliverScheduled(
           { sendId: effect.sendId, uuid },
           restate.rpc.sendOpts({ delay: effect.delay }),
         );
@@ -138,16 +137,17 @@ export async function executeEffects(
     }
   }
 
-  if (scheduledChanged) setScheduled(h.ctx, scheduled);
-  if (childrenChanged) setChildren(h.ctx, children);
+  if (scheduledChanged) setScheduled(ctx, scheduled);
+  if (childrenChanged) setChildren(ctx, children);
 }
 
 /** Resolve/reject awakeables whose condition is now decided by the snapshot. */
 export async function settleSubscriptions(
-  h: HandlerCtx,
+  handler: HandlerContext,
   returned: ReturnedSnapshot,
 ): Promise<void> {
-  const subscriptions = await getSubscriptions(h.ctx);
+  const { ctx } = handler;
+  const subscriptions = await getSubscriptions(ctx);
 
   let changed = false;
   for (const [condition, subscription] of Object.entries(subscriptions)) {
@@ -155,37 +155,38 @@ export async function settleSubscriptions(
     if (outcome.status === "pending") continue;
     for (const awakeable of subscription.awakeables) {
       if (outcome.status === "resolve") {
-        h.ctx.resolveAwakeable(awakeable, outcome.snapshot);
+        ctx.resolveAwakeable(awakeable, outcome.snapshot);
       } else {
-        h.ctx.rejectAwakeable(awakeable, outcome.reason);
+        ctx.rejectAwakeable(awakeable, outcome.reason);
       }
     }
     delete subscriptions[condition];
     changed = true;
   }
 
-  if (changed) setSubscriptions(h.ctx, subscriptions);
+  if (changed) setSubscriptions(ctx, subscriptions);
 }
 
 /** If this is a child instance, report its terminal state back to the parent. */
 export async function reportTerminal(
-  h: HandlerCtx,
+  handler: HandlerContext,
   returned: ReturnedSnapshot,
 ): Promise<void> {
-  if (h.parentKey == null || h.invokeId == null) return;
+  const { ctx, self, parentKey, invokeId } = handler;
+  if (parentKey == null || invokeId == null) return;
   if (returned.status !== "done" && returned.status !== "error") return;
-  if (await wasReported(h.ctx)) return;
-  markReported(h.ctx);
+  if (await wasReported(ctx)) return;
+  markReported(ctx);
 
-  const parent = sendClient(h.ctx, h.self, h.parentKey);
+  const parent = sendClient(ctx, self, parentKey);
   if (returned.status === "done") {
     parent.send({
-      type: `xstate.done.actor.${h.invokeId}`,
+      type: `xstate.done.actor.${invokeId}`,
       output: returned.output,
     });
   } else {
     parent.send({
-      type: `xstate.error.actor.${h.invokeId}`,
+      type: `xstate.error.actor.${invokeId}`,
       error: normalizeError(returned.error),
     });
   }
@@ -193,12 +194,13 @@ export async function reportTerminal(
 
 /** Schedule disposal if the machine reached a final state and a TTL is set. */
 export function maybeScheduleCleanup(
-  h: HandlerCtx,
+  handler: HandlerContext,
   returned: ReturnedSnapshot,
 ): void {
-  if (h.finalStateTTL === undefined) return;
+  const { ctx, self, finalStateTTL } = handler;
+  if (finalStateTTL === undefined) return;
   if (returned.status !== "done") return;
-  sendClient(h.ctx, h.self, h.ctx.key).cleanupState(
-    restate.rpc.sendOpts({ delay: h.finalStateTTL }),
+  sendClient(ctx, self, ctx.key).cleanupState(
+    restate.rpc.sendOpts({ delay: finalStateTTL }),
   );
 }

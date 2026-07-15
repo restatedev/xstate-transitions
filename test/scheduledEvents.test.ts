@@ -11,8 +11,8 @@
  * ctx (ctx.run) inside the child object.
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it, expect, vi } from "vitest";
+import { describeE2E } from "./harness";
 import { assign, cancel, sendTo, setup } from "xstate";
 import { fromPromise } from "../src";
 import { wait } from "./eventually.js";
@@ -74,10 +74,10 @@ const machineFactory = (executor: () => Promise<void>) => {
   });
 };
 
-describe("Scheduled events", () => {
+describeE2E("Scheduled events", (createActor) => {
   it("should run delayed actions", { timeout: 20_000 }, async () => {
     const executor = vi.fn<() => Promise<void>>();
-    using actor = await createRestateTestActor<{ value?: string }>({
+    using actor = await createActor<{ value?: string }>({
       machine: machineFactory(executor),
     });
     await actor.send({ type: "START_DELAYED" });
@@ -89,7 +89,7 @@ describe("Scheduled events", () => {
 
   it("should cancel delayed actions", { timeout: 20_000 }, async () => {
     const executor = vi.fn<() => Promise<void>>();
-    using actor = await createRestateTestActor<{ value?: string }>({
+    using actor = await createActor<{ value?: string }>({
       machine: machineFactory(executor),
     });
     await actor.send({ type: "START_DELAYED" });

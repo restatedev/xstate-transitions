@@ -1,21 +1,12 @@
 /*
- * GAP TEST (scaffold, todo) — BLOCKED BY: Phase 1 "non-existent-workflow 404 guard".
- *
- * Target behaviour: calling snapshot()/send() on a key that was never created
- * must reject with a 404 TerminalError, and succeed after create(). Today
- * core.ts's snapshot/send do `(await ctx.get("state")) ?? {}` + resolveState({}),
- * silently returning the resolved INITIAL state instead of a 404.
- *
- * Un-skip when core.ts gains: `validateExists(ctx)` throwing
- * new TerminalError("No state machine found for this workflow ID. Call 'create' first.", {errorCode:404})
- * at the top of send/snapshot (create is exempt).
- *
- * Adapted to the lean model: drives the raw RestateTestEnvironment + object
- * client (not the auto-creating runner) so it can call before create().
+ * Calling snapshot()/send() on a workflow id that was never created rejects with
+ * a 404 TerminalError, and succeeds after create(). Drives the raw object client
+ * (not the auto-creating runner) so it can call before create(). Runs under both
+ * replay modes.
  */
 
 import { createMachine } from "xstate";
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   RestateContainer,
   RestateTestEnvironment,
@@ -33,21 +24,23 @@ const simpleMachine = createMachine({
   },
 });
 
-describe("Non-existent workflow ID", () => {
-  const obj = createMachineObject("default", simpleMachine);
-  let env: RestateTestEnvironment | undefined;
-  let client: clients.IngressClient<MachineVirtualObject<typeof simpleMachine>>;
+const REPLAY_MODES = [
+  { label: "normal", alwaysReplay: false },
+  { label: "alwaysReplay", alwaysReplay: true },
+] as const;
 
-  afterAll(async () => {
-    if (env) await env.stop();
-  });
+describe.each(REPLAY_MODES)(
+  "Non-existent workflow ID [$label]",
+  ({ alwaysReplay }) => {
+    const obj = createMachineObject("default", simpleMachine);
+    let env: RestateTestEnvironment;
+    let client: clients.IngressClient<
+      MachineVirtualObject<typeof simpleMachine>
+    >;
 
-  it(
-    "Should return 404 when calling snapshot on a non-existent workflow ID",
-    { timeout: 30_000 },
-    async () => {
+    beforeAll(async () => {
       env = await RestateTestEnvironment.start(
-        (restateServer) => restateServer.bind(obj),
+        { services: [obj], alwaysReplay },
         () =>
           new RestateContainer().withEnvironment({
             RESTATE_DEFAULT_NUM_PARTITIONS: "2",
@@ -55,42 +48,53 @@ describe("Non-existent workflow ID", () => {
             RESTATE_DISABLE_TELEMETRY: "true",
           }),
       );
-      const rs = clients.connect({ url: env.baseUrl() });
-      client = rs.objectClient<MachineVirtualObject<typeof simpleMachine>>(
-        { name: "default" },
-        "non-existent-id",
-      );
+      client = clients
+        .connect({ url: env.baseUrl() })
+        .objectClient<MachineVirtualObject<typeof simpleMachine>>(
+          { name: "default" },
+          "non-existent-id",
+        );
+    }, 60_000);
 
-      await expect(() => client.snapshot()).rejects.toThrow(
-        "No state machine found for this workflow ID. Call 'create' first.",
-      );
-    },
-  );
+    afterAll(async () => {
+      await env.stop();
+    });
 
-  it(
-    "Should return 404 when calling send on a non-existent workflow ID",
-    { timeout: 30_000 },
-    async () => {
-      await expect(() => client.send({ type: "START" })).rejects.toThrow(
-        "No state machine found for this workflow ID. Call 'create' first.",
-      );
-    },
-  );
+    it(
+      "Should return 404 when calling snapshot on a non-existent workflow ID",
+      { timeout: 30_000 },
+      async () => {
+        await expect(() => client.snapshot()).rejects.toThrow(
+          "No state machine found for this workflow ID. Call 'create' first.",
+        );
+      },
+    );
 
-  it(
-    "Should succeed after calling create first",
-    { timeout: 30_000 },
-    async () => {
-      await client.create({});
-      expect(await client.snapshot()).toMatchObject({
-        status: "active",
-        value: "idle",
-      });
-      await client.send({ type: "START" });
-      expect(await client.snapshot()).toMatchObject({
-        status: "active",
-        value: "running",
-      });
-    },
-  );
-});
+    it(
+      "Should return 404 when calling send on a non-existent workflow ID",
+      { timeout: 30_000 },
+      async () => {
+        await expect(() => client.send({ type: "START" })).rejects.toThrow(
+          "No state machine found for this workflow ID. Call 'create' first.",
+        );
+      },
+    );
+
+    it(
+      "Should succeed after calling create first",
+      { timeout: 30_000 },
+      async () => {
+        await client.create({});
+        expect(await client.snapshot()).toMatchObject({
+          status: "active",
+          value: "idle",
+        });
+        await client.send({ type: "START" });
+        expect(await client.snapshot()).toMatchObject({
+          status: "active",
+          value: "running",
+        });
+      },
+    );
+  },
+);

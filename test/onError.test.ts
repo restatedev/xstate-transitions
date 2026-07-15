@@ -6,8 +6,8 @@
  * invoke's `onError` transition. This locks that error-routing path.
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 import { fromPromise, setup } from "xstate";
 import { eventually } from "./eventually.js";
 
@@ -33,12 +33,12 @@ const machine = setup({
   },
 });
 
-describe("Promise actor onError", () => {
+describeE2E("Promise actor onError", (createActor) => {
   it(
     "routes a thrown error to the onError target",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{
+      using actor = await createActor<{
         status?: string;
         value?: string;
       }>({ machine });

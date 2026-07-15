@@ -7,8 +7,8 @@
  * must advance after. This locks the delayed-self-send pattern.
  */
 
-import { describe, it, expect } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it, expect } from "vitest";
+import { describeE2E } from "./harness";
 import { createMachine } from "xstate";
 import { eventually, wait } from "./eventually.js";
 
@@ -23,9 +23,9 @@ const machine = createMachine({
   },
 });
 
-describe("after (delayed) transition", () => {
+describeE2E("after (delayed) transition", (createActor) => {
   it("advances only after the delay elapses", { timeout: 60_000 }, async () => {
-    using actor = await createRestateTestActor<{
+    using actor = await createActor<{
       status?: string;
       value?: string;
     }>({ machine });

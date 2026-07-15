@@ -13,6 +13,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:unit",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm build && pnpm test",
     "build": "tsc --project . --outDir ./dist"
   },
   "keywords": [],
@@ -25,8 +26,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@restatedev/restate-sdk-clients": "1.7.3",
-    "@restatedev/restate-sdk-testcontainers": "1.7.3",
+    "@restatedev/restate-sdk-clients": "1.16.1",
+    "@restatedev/restate-sdk-testcontainers": "1.16.1",
     "@types/node": "^24.13.3",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",

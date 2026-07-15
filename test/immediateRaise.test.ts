@@ -9,8 +9,8 @@
  * transitions.
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 import { createMachine, raise } from "xstate";
 import { eventually } from "./eventually.js";
 
@@ -28,12 +28,12 @@ const machine = createMachine({
   },
 });
 
-describe("Immediate (zero-delay) raise", () => {
+describeE2E("Immediate (zero-delay) raise", (createActor) => {
   it(
     "drains the raised event within a single transition()",
     { timeout: 60_000 },
     async () => {
-      using actor = await createRestateTestActor<{
+      using actor = await createActor<{
         status?: string;
         value?: string;
       }>({ machine });

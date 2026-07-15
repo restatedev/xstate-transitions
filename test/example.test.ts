@@ -10,8 +10,8 @@
  */
 
 import { createMachine, assign } from "xstate";
-import { describe, it, expect } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it, expect } from "vitest";
+import { describeE2E } from "./harness";
 
 const xmachine = createMachine({
   id: "counterv1",
@@ -32,12 +32,12 @@ const xmachine = createMachine({
   },
 });
 
-describe("Simple count machine", () => {
+describeE2E("Simple count machine", (createActor) => {
   it(
     "Will respond to different count events",
     { timeout: 60_000 },
     async () => {
-      using machine = await createRestateTestActor<{
+      using machine = await createActor<{
         context: { count: number };
       }>({
         machine: xmachine,

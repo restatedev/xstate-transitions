@@ -14,8 +14,8 @@
  */
 
 import { createMachine } from "xstate";
-import { describe, it, expect, vi } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it, expect, vi } from "vitest";
+import { describeE2E } from "./harness";
 import { wait } from "./eventually.js";
 
 const lifeCycleTrackerMachine = createMachine({
@@ -28,12 +28,12 @@ const lifeCycleTrackerMachine = createMachine({
   },
 });
 
-describe("Cleanup", () => {
+describeE2E("Cleanup", (createActor) => {
   it(
     "Should not cleanup if finalStateTTL is not set",
     { timeout: 20_000 },
     async () => {
-      using machine = await createRestateTestActor({
+      using machine = await createActor({
         machine: lifeCycleTrackerMachine,
       });
       await machine.send({ type: "START" });
@@ -54,7 +54,7 @@ describe("Cleanup", () => {
     "Should cleanup if finalStateTTL is set",
     { timeout: 20_000 },
     async () => {
-      using machine = await createRestateTestActor({
+      using machine = await createActor({
         machine: lifeCycleTrackerMachine,
         options: { finalStateTTL: 100 },
       });
@@ -77,7 +77,7 @@ describe("Cleanup", () => {
     "Should cleanup if on entry reaches final state",
     { timeout: 20_000 },
     async () => {
-      using machine = await createRestateTestActor({
+      using machine = await createActor({
         machine: createMachine({
           id: "task",
           initial: "done",

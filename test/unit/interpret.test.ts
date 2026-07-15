@@ -23,7 +23,7 @@ import { initialStep, resumeStep } from "../../src/xstate/interpret";
 import type { Effect } from "../../src/xstate/types";
 
 const byKind = (effects: Effect[], kind: Effect["kind"]) =>
-  effects.filter((e) => e.kind === kind);
+  effects.filter((effect) => effect.kind === kind);
 
 describe("initialStep()", () => {
   it("bakes entry assign into context and emits no effect for it", () => {
@@ -33,10 +33,10 @@ describe("initialStep()", () => {
       context: { n: 0 },
       entry: assign({ n: 1 }),
     });
-    const s = initialStep(machine, { isChild: false });
-    expect(s.nextState.context).toEqual({ n: 1 });
-    expect(s.effects).toEqual([]);
-    expect(s.returned.status).toBe("active");
+    const result = initialStep(machine, { isChild: false });
+    expect(result.nextState.context).toEqual({ n: 1 });
+    expect(result.effects).toEqual([]);
+    expect(result.returned.status).toBe("active");
   });
 
   it("emits runPromise for a promise-actor invoke", () => {
@@ -47,13 +47,13 @@ describe("initialStep()", () => {
       initial: "run",
       states: { run: { invoke: { src: "work", id: "w" } } },
     });
-    const s = initialStep(machine, { isChild: false });
-    const promises = byKind(s.effects, "runPromise");
+    const result = initialStep(machine, { isChild: false });
+    const promises = byKind(result.effects, "runPromise");
     expect(promises).toHaveLength(1);
     expect(
       (promises[0] as Extract<Effect, { kind: "runPromise" }>).params.id,
     ).toBe("w");
-    expect(byKind(s.effects, "startChild")).toHaveLength(0);
+    expect(byKind(result.effects, "startChild")).toHaveLength(0);
   });
 
   it("emits startChild for a child-machine invoke (not runPromise)", () => {
@@ -67,15 +67,15 @@ describe("initialStep()", () => {
       initial: "run",
       states: { run: { invoke: { src: "child", id: "kid" } } },
     });
-    const s = initialStep(parent, { isChild: false });
-    const starts = byKind(s.effects, "startChild");
+    const result = initialStep(parent, { isChild: false });
+    const starts = byKind(result.effects, "startChild");
     expect(starts).toHaveLength(1);
     expect(starts[0]).toMatchObject({
       kind: "startChild",
       childId: "kid",
       machineId: "child",
     });
-    expect(byKind(s.effects, "runPromise")).toHaveLength(0);
+    expect(byKind(result.effects, "runPromise")).toHaveLength(0);
   });
 
   it("carries invoke input into the startChild effect", () => {
@@ -84,8 +84,8 @@ describe("initialStep()", () => {
       id: "parent",
       invoke: { src: "child", id: "kid", input: { answer: 42 } },
     });
-    const s = initialStep(parent, { isChild: false });
-    expect(byKind(s.effects, "startChild")[0]).toMatchObject({
+    const result = initialStep(parent, { isChild: false });
+    expect(byKind(result.effects, "startChild")[0]).toMatchObject({
       input: { answer: 42 },
     });
   });
@@ -104,8 +104,8 @@ describe("initialStep()", () => {
         rb: { initial: "r", states: { r: { invoke: { src: "b", id: "b" } } } },
       },
     });
-    const s = initialStep(machine, { isChild: false });
-    expect(byKind(s.effects, "runPromise")).toHaveLength(2);
+    const result = initialStep(machine, { isChild: false });
+    expect(byKind(result.effects, "runPromise")).toHaveLength(2);
   });
 });
 
@@ -141,9 +141,9 @@ describe("resumeStep() — events and routing", () => {
   };
 
   it("drains a zero-delay raise inside the macrostep (no effect)", () => {
-    const s = resume({ type: "GO" });
-    expect(s.nextState.value).toBe("c");
-    expect(s.effects).toEqual([]);
+    const result = resume({ type: "GO" });
+    expect(result.nextState.value).toBe("c");
+    expect(result.effects).toEqual([]);
   });
 
   it("emits scheduleSend(self) for a delayed raise", () => {
@@ -176,13 +176,13 @@ describe("resumeStep() — events and routing", () => {
       on: { PING: { actions: forwardTo("kid") } },
     });
     const created = initialStep(parent, { isChild: false });
-    const s = resumeStep(parent, {
+    const result = resumeStep(parent, {
       stored: created.nextState,
       event: { type: "PING" },
       isChild: false,
       knownChildIds: ["kid"],
     });
-    expect(byKind(s.effects, "send")).toEqual([
+    expect(byKind(result.effects, "send")).toEqual([
       {
         kind: "send",
         target: { type: "child", childId: "kid" },
@@ -208,13 +208,13 @@ describe("resumeStep() — events and routing", () => {
       on: { LATER: { actions: "later" } },
     });
     const created = initialStep(parent, { isChild: false });
-    const s = resumeStep(parent, {
+    const result = resumeStep(parent, {
       stored: created.nextState,
       event: { type: "LATER" },
       isChild: false,
       knownChildIds: ["kid"],
     });
-    expect(byKind(s.effects, "scheduleSend")).toEqual([
+    expect(byKind(result.effects, "scheduleSend")).toEqual([
       {
         kind: "scheduleSend",
         sendId: "s",
@@ -234,13 +234,13 @@ describe("resumeStep() — events and routing", () => {
       },
     });
     const created = initialStep(child, { isChild: true });
-    const s = resumeStep(child, {
+    const result = resumeStep(child, {
       stored: created.nextState,
       event: { type: "GO" },
       isChild: true,
       knownChildIds: [],
     });
-    expect(byKind(s.effects, "send")).toEqual([
+    expect(byKind(result.effects, "send")).toEqual([
       { kind: "send", target: { type: "parent" }, event: { type: "DONE" } },
     ]);
   });
@@ -286,15 +286,15 @@ describe("step — resolution semantics", () => {
       },
     });
     const created = initialStep(machine, { isChild: false });
-    const s = resumeStep(machine, {
+    const result = resumeStep(machine, {
       stored: created.nextState,
       event: { type: "GO" },
       isChild: false,
       knownChildIds: [],
     });
-    expect(s.nextState.value).toBe("c");
-    expect(s.nextState.context).toEqual({ x: 5 });
-    expect(s.effects).toEqual([]);
+    expect(result.nextState.value).toBe("c");
+    expect(result.nextState.context).toEqual({ x: 5 });
+    expect(result.effects).toEqual([]);
   });
 
   it("reports a done status and output at a final state", () => {
@@ -305,14 +305,14 @@ describe("step — resolution semantics", () => {
       output: () => ({ ok: true }),
     });
     const created = initialStep(machine, { isChild: false });
-    const s = resumeStep(machine, {
+    const result = resumeStep(machine, {
       stored: created.nextState,
       event: { type: "END" },
       isChild: false,
       knownChildIds: [],
     });
-    expect(s.returned.status).toBe("done");
-    expect(s.returned.output).toEqual({ ok: true });
+    expect(result.returned.status).toBe("done");
+    expect(result.returned.output).toEqual({ ok: true });
   });
 
   it("round-trips through the persisted state across many steps", () => {
@@ -322,15 +322,15 @@ describe("step — resolution semantics", () => {
       context: { n: 0 },
       on: { inc: { actions: assign({ n: ({ context }) => context.n + 1 }) } },
     });
-    let s = initialStep(machine, { isChild: false });
+    let result = initialStep(machine, { isChild: false });
     for (let i = 0; i < 3; i++) {
-      s = resumeStep(machine, {
-        stored: JSON.parse(JSON.stringify(s.nextState)),
+      result = resumeStep(machine, {
+        stored: JSON.parse(JSON.stringify(result.nextState)),
         event: { type: "inc" },
         isChild: false,
         knownChildIds: [],
       });
     }
-    expect(s.nextState.context).toEqual({ n: 3 });
+    expect(result.nextState.context).toEqual({ n: 3 });
   });
 });
