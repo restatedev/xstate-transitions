@@ -67,10 +67,17 @@ import type {
   WaitForRequest,
 } from "./types";
 
-const PRIVATE_HANDLER = { ingressPrivate: true } as const;
+const INTERNAL_HANDLER_METADATA = {
+  "restate.xstate.internal": "true",
+} as const;
+const PRIVATE_HANDLER = {
+  ingressPrivate: true,
+  metadata: INTERNAL_HANDLER_METADATA,
+} as const;
 const PRIVATE_LAZY_HANDLER = {
   ingressPrivate: true,
   enableLazyState: true,
+  metadata: INTERNAL_HANDLER_METADATA,
 } as const;
 
 /**
@@ -108,74 +115,227 @@ export function createMachineObject<
   const { finalStateTTL, contract, ...objectOptions } = options ?? {};
   validateFinalStateTTL(finalStateTTL);
 
+  const inputSerde: restate.Serde<InputFrom<M>> =
+    contract?.input === undefined
+      ? (restate.serde.json as restate.Serde<InputFrom<M>>)
+      : restate.serde.schema(contract.input);
+  const eventSerde: restate.Serde<EventFrom<M>> =
+    contract?.event === undefined
+      ? (restate.serde.json as restate.Serde<EventFrom<M>>)
+      : restate.serde.schema(contract.event);
   const runtime = new MachineRuntime(name, machine, finalStateTTL);
   const handlers = new MachineHandlers(runtime, contract);
-  const createHandler = (
-    context: restate.ObjectContext,
-    input: InputFrom<M>,
-  ): Promise<void> => handlers.create(context, input);
-  const sendHandler = (
-    context: restate.ObjectContext,
-    event: EventFrom<M>,
-  ): Promise<void> => handlers.send(context, event);
-
-  const create: MachineVirtualObject<M>["create"] = contract?.input
-    ? restate.createObjectHandler(
-        { input: restate.serde.schema(contract.input) },
-        createHandler,
-      )
-    : createHandler;
-  const send: MachineVirtualObject<M>["send"] = contract?.event
-    ? restate.createObjectHandler(
-        { input: restate.serde.schema(contract.event) },
-        sendHandler,
-      )
-    : sendHandler;
 
   return restate.object({
     name,
+    description: "Durable XState machine instances backed by Restate.",
     handlers: {
-      create,
-      initChild: restate.createObjectHandler(
-        PRIVATE_HANDLER,
-        (context: restate.ObjectContext, request: InitRequest) =>
-          handlers.initChild(context, request),
+      // Public API
+
+      /**
+       * Creates a root machine instance at the current object key.
+       *
+       * Creation runs the machine's initial transition, persists the resulting
+       * snapshot, and executes its initial effects. Calling `create` again for
+       * the same key deliberately replaces the previous instance and clears
+       * its runtime bookkeeping before starting from the initial state.
+       */
+      create: restate.createObjectHandler(
+        {
+          input: inputSerde,
+          description:
+            "Creates or resets a durable machine instance from its initial state.",
+        },
+        (context: restate.ObjectContext, input: InputFrom<M>) =>
+          handlers.create(context, input),
+      ) as MachineVirtualObject<M>["create"],
+
+      /**
+       * Delivers an application event through the machine's public ingress.
+       *
+       * The event is rejected if it resembles a reserved XState lifecycle
+       * event, and is validated by the optional event contract before this
+       * handler runs. The handler requires an existing, non-disposed instance
+       * and returns only after the transition and its effects are durable.
+       */
+      send: restate.createObjectHandler(
+        {
+          input: eventSerde,
+          description:
+            "Delivers an event and durably applies the resulting machine transition.",
+        },
+        (context: restate.ObjectContext, event: EventFrom<M>) =>
+          handlers.send(context, event),
       ),
-      send,
-      deliverEvent: restate.createObjectHandler(
-        PRIVATE_HANDLER,
-        (context: restate.ObjectContext, event: AnyEventObject) =>
-          handlers.deliverEvent(context, event),
+
+      /**
+       * Reads the current machine state without performing a transition.
+       *
+       * Stored state is rehydrated with the machine registered for this object
+       * key and projected to the stable, serializable `ReturnedSnapshot`
+       * representation. Missing or disposed instances fail explicitly.
+       */
+      snapshot: restate.createObjectHandler(
+        {
+          description:
+            "Returns the current serializable snapshot of a machine instance.",
+        },
+        (context: restate.ObjectContext) => handlers.snapshot(context),
       ),
-      actorDone: restate.createObjectHandler(
-        PRIVATE_HANDLER,
-        (context: restate.ObjectContext, request: ActorDoneRequest) =>
-          handlers.actorDone(context, request),
+
+      /**
+       * Registers an existing Restate awakeable for a machine condition.
+       *
+       * This is the lower-level counterpart to `waitFor`. It resolves or
+       * rejects the awakeable immediately when the condition is already
+       * decided; otherwise it stores the awakeable ID for settlement after a
+       * later transition. It is exclusive because registration mutates state.
+       */
+      subscribe: restate.createObjectHandler(
+        {
+          description:
+            "Registers an awakeable for completion or a machine state-tag condition.",
+        },
+        (context: restate.ObjectContext, request: SubscribeRequest) =>
+          handlers.subscribe(context, request),
       ),
-      actorError: restate.createObjectHandler(
-        PRIVATE_HANDLER,
-        (context: restate.ObjectContext, request: ActorErrorRequest) =>
-          handlers.actorError(context, request),
-      ),
-      deliverScheduled: restate.createObjectHandler(
-        PRIVATE_HANDLER,
-        (context: restate.ObjectContext, request: ScheduledEvent) =>
-          handlers.deliverScheduled(context, request),
-      ),
-      executeActor: restate.createObjectSharedHandler(
-        PRIVATE_LAZY_HANDLER,
-        (context: restate.ObjectSharedContext, request: ExecuteRequest) =>
-          handlers.executeActor(context, request),
-      ),
-      snapshot: (context: restate.ObjectContext) => handlers.snapshot(context),
-      subscribe: (context: restate.ObjectContext, request: SubscribeRequest) =>
-        handlers.subscribe(context, request),
+
+      /**
+       * Waits until the machine completes or enters a state with a given tag.
+       *
+       * The shared handler creates an awakeable, registers it through the
+       * exclusive `subscribe` handler, and optionally delivers an event only
+       * after registration to avoid missed transitions. A caller-supplied
+       * timeout is reported as a precondition failure.
+       */
       waitFor: restate.createObjectSharedHandler(
+        {
+          description:
+            "Waits for completion or a state tag, optionally sending an event after subscribing.",
+        },
         (context: restate.ObjectSharedContext, request: WaitForRequest<M>) =>
           handlers.waitFor(context, request),
       ),
+
+      // Internal handlers
+
+      /**
+       * Initializes a child machine instance created by a parent machine.
+       *
+       * The request selects a machine from the root's registered child graph
+       * and records the parent key, invoke ID, and execution generation needed
+       * to route lifecycle events back to the parent safely.
+       */
+      initChild: restate.createObjectHandler(
+        {
+          ...PRIVATE_HANDLER,
+          description:
+            "Initializes a child machine instance and records its parent identity.",
+        },
+        (context: restate.ObjectContext, request: InitRequest) =>
+          handlers.initChild(context, request),
+      ),
+
+      /**
+       * Applies a trusted integration-generated event to an instance.
+       *
+       * Unlike public `send`, this path intentionally accepts XState lifecycle
+       * events produced by child machines, actors, delayed sends, and
+       * `waitFor`. Delivery to an instance that no longer exists is a no-op so
+       * late asynchronous messages remain harmless.
+       */
+      deliverEvent: restate.createObjectHandler(
+        {
+          ...PRIVATE_HANDLER,
+          description:
+            "Applies a trusted internal or XState lifecycle event to an instance.",
+        },
+        (context: restate.ObjectContext, event: AnyEventObject) =>
+          handlers.deliverEvent(context, event),
+      ),
+
+      /**
+       * Accepts successful completion of a promise actor execution.
+       *
+       * The execution generation is consumed atomically; stale completions
+       * from a stopped or re-entered actor are ignored. A current completion
+       * is translated to XState's actor-done event and applied durably.
+       */
+      actorDone: restate.createObjectHandler(
+        {
+          ...PRIVATE_HANDLER,
+          description:
+            "Delivers a successful result from the current promise actor execution.",
+        },
+        (context: restate.ObjectContext, request: ActorDoneRequest) =>
+          handlers.actorDone(context, request),
+      ),
+
+      /**
+       * Accepts failed completion of a promise actor execution.
+       *
+       * As with `actorDone`, the generation check prevents a late result from
+       * mutating a newer invocation. The error is normalized into XState's
+       * actor-error event before the machine resumes.
+       */
+      actorError: restate.createObjectHandler(
+        {
+          ...PRIVATE_HANDLER,
+          description:
+            "Delivers a normalized error from the current promise actor execution.",
+        },
+        (context: restate.ObjectContext, request: ActorErrorRequest) =>
+          handlers.actorError(context, request),
+      ),
+
+      /**
+       * Delivers an event whose Restate delay has elapsed.
+       *
+       * The stored UUID must match the request, which makes cancellation and
+       * replacement race-safe. A current event is removed from the schedule,
+       * then applied locally or forwarded to its target object key.
+       */
+      deliverScheduled: restate.createObjectHandler(
+        {
+          ...PRIVATE_HANDLER,
+          description:
+            "Delivers a current delayed event and ignores cancelled or stale schedules.",
+        },
+        (context: restate.ObjectContext, request: ScheduledEvent) =>
+          handlers.deliverScheduled(context, request),
+      ),
+
+      /**
+       * Executes a promise actor outside the exclusive transition handler.
+       *
+       * Shared, lazy-state execution lets long-running user work proceed
+       * without holding the object's exclusive lock or loading unrelated
+       * state. The outcome is sent back through `actorDone` or `actorError`
+       * together with its execution generation.
+       */
+      executeActor: restate.createObjectSharedHandler(
+        {
+          ...PRIVATE_LAZY_HANDLER,
+          description:
+            "Runs a promise actor and reports its generation-scoped outcome.",
+        },
+        (context: restate.ObjectSharedContext, request: ExecuteRequest) =>
+          handlers.executeActor(context, request),
+      ),
+
+      /**
+       * Disposes an instance after its configured final-state retention time.
+       *
+       * The handler clears durable machine/runtime state and leaves a disposed
+       * marker so subsequent public calls return a stable gone response rather
+       * than looking like an instance that was never created.
+       */
       cleanupState: restate.createObjectHandler(
-        PRIVATE_HANDLER,
+        {
+          ...PRIVATE_HANDLER,
+          description:
+            "Clears a completed instance after its final-state retention period.",
+        },
         (context: restate.ObjectContext) => handlers.cleanupState(context),
       ),
     } satisfies MachineVirtualObject<M>,
