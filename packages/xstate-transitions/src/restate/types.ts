@@ -87,6 +87,14 @@ export interface ScheduledEvent {
   readonly uuid: string;
 }
 
+/**
+ * Payload of token-guarded final-state cleanup. Parent-driven child disposal
+ * uses the separate, unconditional `cleanupState` handler.
+ */
+export interface CleanupFinalStateRequest {
+  readonly token: string;
+}
+
 /** Persisted record of a pending delayed delivery, keyed by sendId. */
 export interface ScheduledDelivery {
   readonly uuid: string;
@@ -160,6 +168,10 @@ export interface MachineVirtualObject<
     request: ScheduledEvent,
   ) => Promise<void>;
   initChild: (context: ObjectContext, request: InitRequest) => Promise<void>;
+  cleanupFinalState: (
+    context: ObjectContext,
+    request: CleanupFinalStateRequest,
+  ) => Promise<void>;
   cleanupState: (context: ObjectContext) => Promise<void>;
 }
 

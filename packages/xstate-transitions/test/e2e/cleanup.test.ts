@@ -80,4 +80,29 @@ describeE2E("Cleanup", (createActor) => {
       );
     },
   );
+
+  it(
+    "does not let an old final-state TTL dispose a recreated instance",
+    { timeout: 20_000 },
+    async () => {
+      using machine = await createActor({
+        machine: lifeCycleTrackerMachine,
+        options: { finalStateTTL: 500 },
+      });
+
+      await machine.send({ type: "START" });
+      await machine.send({ type: "COMPLETE" });
+      await machine.create();
+      expect(await machine.snapshot()).toMatchObject({
+        status: "active",
+        value: "idle",
+      });
+
+      await wait(750);
+      expect(await machine.snapshot()).toMatchObject({
+        status: "active",
+        value: "idle",
+      });
+    },
+  );
 });

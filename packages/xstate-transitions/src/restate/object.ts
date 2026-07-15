@@ -31,6 +31,7 @@ import {
   clearIdentity,
   clearRuntimeState,
   getActorExecutions,
+  getCleanupToken,
   getChildren,
   getExecutionId,
   getInvokeId,
@@ -51,6 +52,7 @@ import type {
   ActorDoneRequest,
   ActorErrorRequest,
   ChildRecord,
+  CleanupFinalStateRequest,
   ExecuteRequest,
   HandlerContext,
   InitRequest,
@@ -315,20 +317,29 @@ export function createMachineObject<
           handlers.executeActor(context, request),
       ),
 
-      /**
-       * Disposes an instance after its configured final-state retention time.
-       *
-       * The handler clears durable machine/runtime state and leaves a disposed
-       * marker so subsequent public calls return a stable gone response rather
-       * than looking like an instance that was never created.
-       */
+      /** Disposes a child instance that its parent stopped. */
       cleanupState: restate.createObjectHandler(
         {
           ...INTERNAL_HANDLER_OPTIONS,
-          description:
-            "Clears a completed instance after its final-state retention period.",
+          description: "Clears a child instance stopped by its parent.",
         },
         (context: restate.ObjectContext) => handlers.cleanupState(context),
+      ),
+
+      /**
+       * Disposes the completed incarnation that scheduled a final-state TTL.
+       *
+       * The token prevents a delayed request from an older incarnation from
+       * clearing a machine that was recreated at the same object key.
+       */
+      cleanupFinalState: restate.createObjectHandler(
+        {
+          ...INTERNAL_HANDLER_OPTIONS,
+          description:
+            "Clears a completed instance only when its cleanup generation is current.",
+        },
+        (context: restate.ObjectContext, request: CleanupFinalStateRequest) =>
+          handlers.cleanupFinalState(context, request),
       ),
     } satisfies MachineVirtualObject<M>,
     options: objectOptions,
@@ -564,7 +575,16 @@ class MachineHandlers<M extends AnyStateMachine> {
     }
   }
 
-  async cleanupState(context: restate.ObjectContext): Promise<void> {
+  cleanupState(context: restate.ObjectContext): Promise<void> {
+    markDisposedAndClear(context);
+    return Promise.resolve();
+  }
+
+  async cleanupFinalState(
+    context: restate.ObjectContext,
+    request: CleanupFinalStateRequest,
+  ): Promise<void> {
+    if ((await getCleanupToken(context)) !== request.token) return;
     markDisposedAndClear(context);
   }
 }

@@ -478,6 +478,77 @@ describe("resumeStep() — events and routing", () => {
 });
 
 describe("step — resolution semantics", () => {
+  it("settles exit, transition, entry, raised, and always actions in order", () => {
+    const append = (label: string) =>
+      assign({
+        trace: ({ context }: { context: { trace: string[] } }) => [
+          ...context.trace,
+          label,
+        ],
+      });
+    const machine = createMachine({
+      types: {} as { context: { trace: string[] } },
+      id: "macrostep-order",
+      context: { trace: [] },
+      initial: "a",
+      states: {
+        a: {
+          exit: append("exit:a"),
+          on: {
+            GO: {
+              target: "b",
+              actions: [
+                append("transition:GO"),
+                raise({ type: "FIRST" }),
+                raise({ type: "SECOND" }),
+              ],
+            },
+          },
+        },
+        b: {
+          entry: append("entry:b"),
+          exit: append("exit:b"),
+          on: {
+            FIRST: { target: "c", actions: append("event:FIRST") },
+          },
+        },
+        c: {
+          entry: append("entry:c"),
+          exit: append("exit:c"),
+          always: { target: "d", actions: append("always:c") },
+        },
+        d: {
+          entry: append("entry:d"),
+          on: { SECOND: { actions: append("event:SECOND") } },
+        },
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+
+    const result = resumeStep(machine, {
+      stored: created.nextState,
+      event: { type: "GO" },
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+
+    expect(result.nextState.value).toBe("d");
+    expect((result.nextState.context as { trace: string[] }).trace).toEqual([
+      "exit:a",
+      "transition:GO",
+      "entry:b",
+      "exit:b",
+      "event:FIRST",
+      "entry:c",
+      "exit:c",
+      "always:c",
+      "entry:d",
+      "event:SECOND",
+    ]);
+    expect(result.effects).toEqual([]);
+  });
+
   it("resolves enqueueActions (assign baked, raise drained) with no effects", () => {
     const machine = createMachine({
       types: {} as { context: { x: number } },

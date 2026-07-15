@@ -611,6 +611,8 @@ Use reset only after coordinating or quiescing the existing execution. Reset
 does not cancel the underlying promise computation or send cleanup calls to
 children whose routing records it clears. Actor completion reports and delayed
 deliveries from the old run are generation/token guarded and become no-ops.
+Final-state cleanup scheduled by the old run is guarded the same way and cannot
+dispose the replacement instance.
 Application events that were already routed by an old child are not
 generation-scoped, however, and external side effects already performed cannot
 be undone.
@@ -1267,8 +1269,9 @@ High-value invariants to preserve include:
 | `subscribe` | `SubscribeRequest`  | `void`             | Low-level awakeable registration                  |
 
 The object also contains ingress-private handlers named `deliverEvent`,
-`actorDone`, `actorError`, `executeActor`, `deliverScheduled`, `initChild`, and
-`cleanupState`. `deliverEvent` carries internally routed domain events;
+`actorDone`, `actorError`, `executeActor`, `deliverScheduled`, `initChild`,
+`cleanupState`, and `cleanupFinalState`. `deliverEvent` carries internally routed
+domain events;
 `actorDone` and `actorError` are the finite actor lifecycle protocols. They are
 implementation details and should not be called by application clients.
 
@@ -1284,6 +1287,7 @@ All KV access is centralized in [`src/restate/state.ts`](src/restate/state.ts).
 | `scheduled`       | send ID → delivery record       | Cancellation and stale-delivery guard                         |
 | `children`        | child ID → `{ key, machineId }` | Durable child routing and lifecycle                           |
 | `actorExecutions` | actor ID → execution ID         | Rejects stale promise and child completion reports            |
+| `cleanupToken`    | cleanup execution ID            | Rejects final-state cleanup from an older instance            |
 | `reported`        | `boolean`                       | Prevents duplicate terminal reports from a child              |
 | `machineId`       | `string`                        | Selects child machine logic from the registry                 |
 | `parentKey`       | `string`                        | Routes `sendParent` and terminal reports                      |

@@ -9,6 +9,7 @@ import {
   getSubscriptions,
   markReported,
   setActorExecutions,
+  setCleanupToken,
   setChildren,
   setScheduled,
   setSubscriptions,
@@ -224,7 +225,11 @@ export function maybeScheduleCleanup(
   const { ctx, self, finalStateTTL } = handler;
   if (finalStateTTL === undefined) return;
   if (returned.status !== "done") return;
+  const token = ctx.rand.uuidv4();
+  setCleanupToken(ctx, token);
   const sender = ctx.objectSendClient<MachineVirtualObject>(self, ctx.key);
-  const options = restate.rpc.sendOpts<void>({ delay: finalStateTTL });
-  sender.cleanupState(options);
+  const options = restate.rpc.sendOpts<{ token: string }>({
+    delay: finalStateTTL,
+  });
+  sender.cleanupFinalState({ token }, options);
 }

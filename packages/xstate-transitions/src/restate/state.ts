@@ -24,6 +24,8 @@ const KEYS = {
   children: "children",
   /** Active promise/child generation, keyed by actor id. */
   actorExecutions: "actorExecutions",
+  /** Generation of the currently scheduled final-state cleanup. */
+  cleanupToken: "cleanupToken",
   /** `true` once a child has reported its terminal state to its parent. */
   reported: "reported",
   /** For a child instance: which registered machine it runs. */
@@ -50,6 +52,12 @@ export async function isDisposed(ctx: ObjectSharedContext): Promise<boolean> {
 
 export async function wasReported(ctx: ObjectSharedContext): Promise<boolean> {
   return (await ctx.get<boolean>(KEYS.reported)) ?? false;
+}
+
+export function getCleanupToken(
+  ctx: ObjectSharedContext,
+): Promise<string | null> {
+  return ctx.get<string>(KEYS.cleanupToken);
 }
 
 export function getMachineId(ctx: ObjectSharedContext): Promise<string | null> {
@@ -136,6 +144,10 @@ export function markReported(ctx: ObjectContext): void {
   ctx.set(KEYS.reported, true);
 }
 
+export function setCleanupToken(ctx: ObjectContext, token: string): void {
+  ctx.set(KEYS.cleanupToken, token);
+}
+
 export function markDisposedAndClear(ctx: ObjectContext): void {
   ctx.clearAll();
   ctx.set(KEYS.disposed, true);
@@ -167,6 +179,7 @@ export function clearRuntimeState(ctx: ObjectContext): void {
   ctx.clear(KEYS.scheduled);
   ctx.clear(KEYS.children);
   ctx.clear(KEYS.actorExecutions);
+  ctx.clear(KEYS.cleanupToken);
   ctx.clear(KEYS.reported);
 }
 

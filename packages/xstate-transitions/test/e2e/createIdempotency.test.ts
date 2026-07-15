@@ -43,4 +43,39 @@ describeE2E("create() idempotency / re-create", (createActor) => {
       expect(snap.value).toBe("idle");
     },
   );
+
+  it(
+    "journals initial observations per instance but refreshes them on create",
+    { timeout: 60_000 },
+    async () => {
+      let observations = 0;
+      const machine = createMachine({
+        types: {} as { context: { first: number; second: number } },
+        id: "recreate-observations",
+        context: { first: 0, second: 0 },
+        entry: [
+          assign({ first: () => ++observations }),
+          assign({ second: () => ++observations }),
+        ],
+      });
+
+      using actor = await createActor<{
+        context: { first: number; second: number };
+      }>({ machine });
+
+      const first = (await actor.snapshot()).context;
+      expect(first.second).toBe(first.first + 1);
+      expect(observations).toBe(first.second);
+
+      // Reads may replay the handler but cannot evaluate the initial Step again.
+      expect((await actor.snapshot()).context).toEqual(first);
+      expect(observations).toBe(first.second);
+
+      await actor.create();
+      const second = (await actor.snapshot()).context;
+      expect(second.first).toBeGreaterThan(first.second);
+      expect(second.second).toBe(second.first + 1);
+      expect(observations).toBe(second.second);
+    },
+  );
 });

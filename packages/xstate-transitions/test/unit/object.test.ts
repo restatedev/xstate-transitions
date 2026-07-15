@@ -43,6 +43,7 @@ describe("createMachineObject configuration", () => {
       "deliverScheduled",
       "executeActor",
       "cleanupState",
+      "cleanupFinalState",
     ]) {
       expect(getHandlerOptions(handlers[name])).toMatchObject({
         description: expect.any(String),

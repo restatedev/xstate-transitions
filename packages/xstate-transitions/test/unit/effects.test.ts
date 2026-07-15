@@ -249,6 +249,77 @@ describe("executeEffects", () => {
     expect(harness.state.get("scheduled")).toEqual({});
   });
 
+  it("keeps only the newest token when the same send id is scheduled twice", async () => {
+    const harness = createHarness();
+
+    await executeEffects(harness.handler, [
+      {
+        kind: "scheduleSend",
+        sendId: "slot",
+        target: { type: "self" },
+        event: { type: "OLD" },
+        delay: 100,
+      },
+      {
+        kind: "scheduleSend",
+        sendId: "slot",
+        target: { type: "self" },
+        event: { type: "NEW" },
+        delay: 50,
+      },
+    ]);
+
+    expect(harness.state.get("scheduled")).toEqual({
+      slot: {
+        uuid: "uuid-2",
+        targetKey: "parent-key",
+        event: { type: "NEW" },
+      },
+    });
+    expect(
+      harness.clientCalls.map(({ method, args }) => ({ method, args })),
+    ).toEqual([
+      {
+        method: "deliverScheduled",
+        args: [{ sendId: "slot", uuid: "uuid-1" }, expect.anything()],
+      },
+      {
+        method: "deliverScheduled",
+        args: [{ sendId: "slot", uuid: "uuid-2" }, expect.anything()],
+      },
+    ]);
+  });
+
+  it("lets a schedule after cancel establish a new token", async () => {
+    const harness = createHarness();
+    harness.state.set("scheduled", {
+      slot: {
+        uuid: "old-token",
+        targetKey: "parent-key",
+        event: { type: "OLD" },
+      },
+    });
+
+    await executeEffects(harness.handler, [
+      { kind: "cancel", sendId: "slot" },
+      {
+        kind: "scheduleSend",
+        sendId: "slot",
+        target: { type: "self" },
+        event: { type: "NEW" },
+        delay: 50,
+      },
+    ]);
+
+    expect(harness.state.get("scheduled")).toEqual({
+      slot: {
+        uuid: "uuid-1",
+        targetKey: "parent-key",
+        event: { type: "NEW" },
+      },
+    });
+  });
+
   it("drops sends whose parent or child no longer exists", async () => {
     const harness = createHarness();
 
@@ -375,7 +446,9 @@ describe("terminal effects", () => {
     expect(withTtl.clientCalls).toHaveLength(1);
     expect(withTtl.clientCalls[0]).toMatchObject({
       key: "parent-key",
-      method: "cleanupState",
+      method: "cleanupFinalState",
+      args: [{ token: "uuid-1" }, expect.anything()],
     });
+    expect(withTtl.state.get("cleanupToken")).toBe("uuid-1");
   });
 });
