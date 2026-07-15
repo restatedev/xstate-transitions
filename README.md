@@ -1,8 +1,13 @@
 # xstate-transitions
 
-Run XState v5 **pure-transition** machines as durable
+Run XState v6 **pure-transition** machines as durable
 [Restate](https://restate.dev) virtual objects — stateless between requests, with
 the machine snapshot _as_ the durable state.
+
+> [!NOTE]
+> This integration targets **XState v6** (currently `6.0.0-alpha.21`). Because it
+> depends on XState's pure-transition internals the version is pinned exactly, and
+> XState v6 is still in alpha — treat an upgrade as an integration change.
 
 This is a pnpm workspace:
 
