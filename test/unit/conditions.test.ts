@@ -3,7 +3,7 @@ import {
   evaluateCondition,
   isValidCondition,
 } from "../../src/xstate/conditions";
-import type { ReturnedSnapshot } from "../../src/xstate/snapshot";
+import type { ReturnedSnapshot } from "../../src/xstate/types";
 
 const snap = (over: Partial<ReturnedSnapshot>): ReturnedSnapshot => ({
   value: "x",

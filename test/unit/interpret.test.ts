@@ -1,5 +1,5 @@
 /*
- * Pure unit tests for the integration heart: `step()`.
+ * Pure unit tests for the integration heart: `initialStep` / `resumeStep`.
  *
  * These run with NO Restate — plain machines in, { nextState, effects } out.
  * This is the whole point of the refactor: the xstate<->restate binding is a
@@ -19,12 +19,13 @@ import {
   cancel,
   setup,
 } from "xstate";
-import { step, type Effect } from "../../src/xstate/interpret";
+import { initialStep, resumeStep } from "../../src/xstate/interpret";
+import type { Effect } from "../../src/xstate/types";
 
 const byKind = (effects: Effect[], kind: Effect["kind"]) =>
   effects.filter((e) => e.kind === kind);
 
-describe("step() — initial transition", () => {
+describe("initialStep()", () => {
   it("bakes entry assign into context and emits no effect for it", () => {
     const machine = createMachine({
       types: {} as { context: { n: number } },
@@ -32,12 +33,7 @@ describe("step() — initial transition", () => {
       context: { n: 0 },
       entry: assign({ n: 1 }),
     });
-    const s = step(machine, {
-      stored: null,
-      input: undefined,
-      isChild: false,
-      knownChildIds: [],
-    });
+    const s = initialStep(machine, { isChild: false });
     expect(s.nextState.context).toEqual({ n: 1 });
     expect(s.effects).toEqual([]);
     expect(s.returned.status).toBe("active");
@@ -51,11 +47,7 @@ describe("step() — initial transition", () => {
       initial: "run",
       states: { run: { invoke: { src: "work", id: "w" } } },
     });
-    const s = step(machine, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
+    const s = initialStep(machine, { isChild: false });
     const promises = byKind(s.effects, "runPromise");
     expect(promises).toHaveLength(1);
     expect(
@@ -75,11 +67,7 @@ describe("step() — initial transition", () => {
       initial: "run",
       states: { run: { invoke: { src: "child", id: "kid" } } },
     });
-    const s = step(parent, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
+    const s = initialStep(parent, { isChild: false });
     const starts = byKind(s.effects, "startChild");
     expect(starts).toHaveLength(1);
     expect(starts[0]).toMatchObject({
@@ -96,31 +84,10 @@ describe("step() — initial transition", () => {
       id: "parent",
       invoke: { src: "child", id: "kid", input: { answer: 42 } },
     });
-    const s = step(parent, { stored: null, isChild: false, knownChildIds: [] });
+    const s = initialStep(parent, { isChild: false });
     expect(byKind(s.effects, "startChild")[0]).toMatchObject({
       input: { answer: 42 },
     });
-  });
-
-  it("does not re-start a child already known", () => {
-    const child = createMachine({ id: "child" });
-    const parent = setup({ actors: { child } }).createMachine({
-      id: "parent",
-      invoke: { src: "child", id: "kid" },
-    });
-    const created = step(parent, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    // resume: the child is already known, so no fresh startChild
-    const resumed = step(parent, {
-      stored: created.nextState,
-      event: { type: "NOOP" },
-      isChild: false,
-      knownChildIds: ["kid"],
-    });
-    expect(byKind(resumed.effects, "startChild")).toHaveLength(0);
   });
 
   it("emits two runPromise effects for two parallel invokes", () => {
@@ -137,16 +104,12 @@ describe("step() — initial transition", () => {
         rb: { initial: "r", states: { r: { invoke: { src: "b", id: "b" } } } },
       },
     });
-    const s = step(machine, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
+    const s = initialStep(machine, { isChild: false });
     expect(byKind(s.effects, "runPromise")).toHaveLength(2);
   });
 });
 
-describe("step() — events and routing", () => {
+describe("resumeStep() — events and routing", () => {
   const machine = () =>
     createMachine({
       id: "m",
@@ -166,37 +129,25 @@ describe("step() — events and routing", () => {
       },
     });
 
-  it("drains a zero-delay raise inside the macrostep (no effect)", () => {
+  const resume = (event: { type: string }) => {
     const m = machine();
-    const created = step(m, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    const s = step(m, {
+    const created = initialStep(m, { isChild: false });
+    return resumeStep(m, {
       stored: created.nextState,
-      event: { type: "GO" },
+      event,
       isChild: false,
       knownChildIds: [],
     });
+  };
+
+  it("drains a zero-delay raise inside the macrostep (no effect)", () => {
+    const s = resume({ type: "GO" });
     expect(s.nextState.value).toBe("c");
     expect(s.effects).toEqual([]);
   });
 
   it("emits scheduleSend(self) for a delayed raise", () => {
-    const m = machine();
-    const created = step(m, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    const s = step(m, {
-      stored: created.nextState,
-      event: { type: "LATER" },
-      isChild: false,
-      knownChildIds: [],
-    });
-    const scheduled = byKind(s.effects, "scheduleSend");
+    const scheduled = byKind(resume({ type: "LATER" }).effects, "scheduleSend");
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0]).toMatchObject({
       kind: "scheduleSend",
@@ -208,19 +159,7 @@ describe("step() — events and routing", () => {
   });
 
   it("emits cancel for cancel(id)", () => {
-    const m = machine();
-    const created = step(m, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    const s = step(m, {
-      stored: created.nextState,
-      event: { type: "KILL" },
-      isChild: false,
-      knownChildIds: [],
-    });
-    expect(byKind(s.effects, "cancel")).toEqual([
+    expect(byKind(resume({ type: "KILL" }).effects, "cancel")).toEqual([
       { kind: "cancel", sendId: "d" },
     ]);
   });
@@ -236,12 +175,8 @@ describe("step() — events and routing", () => {
       invoke: { src: "child", id: "kid" },
       on: { PING: { actions: forwardTo("kid") } },
     });
-    const created = step(parent, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    const s = step(parent, {
+    const created = initialStep(parent, { isChild: false });
+    const s = resumeStep(parent, {
       stored: created.nextState,
       event: { type: "PING" },
       isChild: false,
@@ -272,12 +207,8 @@ describe("step() — events and routing", () => {
       invoke: { src: "child", id: "kid" },
       on: { LATER: { actions: "later" } },
     });
-    const created = step(parent, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    const s = step(parent, {
+    const created = initialStep(parent, { isChild: false });
+    const s = resumeStep(parent, {
       stored: created.nextState,
       event: { type: "LATER" },
       isChild: false,
@@ -302,12 +233,8 @@ describe("step() — events and routing", () => {
         idle: { on: { GO: { actions: sendParent({ type: "DONE" }) } } },
       },
     });
-    const created = step(child, {
-      stored: null,
-      isChild: true,
-      knownChildIds: [],
-    });
-    const s = step(child, {
+    const created = initialStep(child, { isChild: true });
+    const s = resumeStep(child, {
       stored: created.nextState,
       event: { type: "GO" },
       isChild: true,
@@ -317,9 +244,25 @@ describe("step() — events and routing", () => {
       { kind: "send", target: { type: "parent" }, event: { type: "DONE" } },
     ]);
   });
+
+  it("does not re-start a child already known", () => {
+    const child = createMachine({ id: "child" });
+    const parent = setup({ actors: { child } }).createMachine({
+      id: "parent",
+      invoke: { src: "child", id: "kid" },
+    });
+    const created = initialStep(parent, { isChild: false });
+    const resumed = resumeStep(parent, {
+      stored: created.nextState,
+      event: { type: "NOOP" },
+      isChild: false,
+      knownChildIds: ["kid"],
+    });
+    expect(byKind(resumed.effects, "startChild")).toHaveLength(0);
+  });
 });
 
-describe("step() — resolution semantics", () => {
+describe("step — resolution semantics", () => {
   it("resolves enqueueActions (assign baked, raise drained) with no effects", () => {
     const machine = createMachine({
       types: {} as { context: { x: number } },
@@ -342,12 +285,8 @@ describe("step() — resolution semantics", () => {
         c: {},
       },
     });
-    const created = step(machine, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    const s = step(machine, {
+    const created = initialStep(machine, { isChild: false });
+    const s = resumeStep(machine, {
       stored: created.nextState,
       event: { type: "GO" },
       isChild: false,
@@ -365,12 +304,8 @@ describe("step() — resolution semantics", () => {
       states: { a: { on: { END: "done" } }, done: { type: "final" } },
       output: () => ({ ok: true }),
     });
-    const created = step(machine, {
-      stored: null,
-      isChild: false,
-      knownChildIds: [],
-    });
-    const s = step(machine, {
+    const created = initialStep(machine, { isChild: false });
+    const s = resumeStep(machine, {
       stored: created.nextState,
       event: { type: "END" },
       isChild: false,
@@ -387,9 +322,9 @@ describe("step() — resolution semantics", () => {
       context: { n: 0 },
       on: { inc: { actions: assign({ n: ({ context }) => context.n + 1 }) } },
     });
-    let s = step(machine, { stored: null, isChild: false, knownChildIds: [] });
+    let s = initialStep(machine, { isChild: false });
     for (let i = 0; i < 3; i++) {
-      s = step(machine, {
+      s = resumeStep(machine, {
         stored: JSON.parse(JSON.stringify(s.nextState)),
         event: { type: "inc" },
         isChild: false,

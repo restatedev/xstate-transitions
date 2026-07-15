@@ -2,9 +2,9 @@ import type { AnyStateMachine, InputFrom, EventFrom } from "xstate";
 import * as restate from "@restatedev/restate-sdk";
 import { buildRegistry } from "../xstate/registry";
 import { fromStored, toReturnedSnapshot } from "../xstate/snapshot";
-import type { StoredState, ReturnedSnapshot } from "../xstate/snapshot";
 import { evaluateCondition, isValidCondition } from "../xstate/conditions";
-import { step } from "../xstate/interpret";
+import { initialStep, resumeStep } from "../xstate/interpret";
+import type { ReturnedSnapshot, Step } from "../xstate/types";
 import {
   selfDef,
   sendClient,
@@ -13,27 +13,40 @@ import {
   settleSubscriptions,
   reportTerminal,
   maybeScheduleCleanup,
-  type HandlerCtx,
 } from "./effects";
 import { runActor } from "./run-actor";
-import { KEYS, clearRuntimeState } from "./state";
+import {
+  getState,
+  isDisposed,
+  getMachineId,
+  getParentKey,
+  getInvokeId,
+  getChildren,
+  getScheduled,
+  setScheduled,
+  setState,
+  setIdentity,
+  markDisposedAndClear,
+  clearRuntimeState,
+  clearIdentity,
+  getSubscriptions,
+  setSubscriptions,
+} from "./state";
 import type {
+  HandlerCtx,
   MachineObjectOptions,
   MachineVirtualObject,
   ExecuteRequest,
   ScheduledEvent,
-  ScheduledDelivery,
   InitRequest,
   SubscribeRequest,
   WaitForRequest,
-  Subscription,
-  ChildRecord,
 } from "./types";
 
 async function validateNotDisposed(
   context: restate.ObjectSharedContext,
 ): Promise<void> {
-  if (await context.get<boolean>(KEYS.disposed)) {
+  if (await isDisposed(context)) {
     throw new restate.TerminalError(
       "The state machine has been disposed after reaching it's final state",
       { errorCode: 410 },
@@ -44,7 +57,7 @@ async function validateNotDisposed(
 async function validateExists(
   context: restate.ObjectSharedContext,
 ): Promise<void> {
-  if ((await context.get<StoredState>(KEYS.state)) == null) {
+  if ((await getState(context)) == null) {
     throw new restate.TerminalError(
       "No state machine found for this workflow ID. Call 'create' first.",
       { errorCode: 404 },
@@ -82,17 +95,14 @@ export function createMachineObject<
     return {
       ctx: context,
       self,
-      parentKey: (await context.get<string>(KEYS.parentKey)) ?? undefined,
-      invokeId: (await context.get<string>(KEYS.invokeId)) ?? undefined,
+      parentKey: (await getParentKey(context)) ?? undefined,
+      invokeId: (await getInvokeId(context)) ?? undefined,
       finalStateTTL,
     };
   }
 
-  async function commit(
-    h: HandlerCtx,
-    result: ReturnType<typeof step>,
-  ): Promise<void> {
-    h.ctx.set(KEYS.state, result.nextState);
+  async function commit(h: HandlerCtx, result: Step): Promise<void> {
+    setState(h.ctx, result.nextState);
     await executeEffects(h, result.effects);
     await settleSubscriptions(h, result.returned);
     await reportTerminal(h, result.returned);
@@ -103,22 +113,20 @@ export function createMachineObject<
     context: restate.ObjectContext,
     event: EventFrom<M>,
   ): Promise<void> {
-    const stored = await context.get<StoredState>(KEYS.state);
+    const stored = await getState(context);
     if (stored == null) return;
     const h = await handlerCtx(context);
-    const instanceMachine = getMachine(
-      await context.get<string>(KEYS.machineId),
+    const instanceMachine = getMachine(await getMachineId(context));
+    const knownChildIds = Object.keys(await getChildren(context));
+    await commit(
+      h,
+      resumeStep(instanceMachine, {
+        stored,
+        event,
+        isChild: h.parentKey != null,
+        knownChildIds,
+      }),
     );
-    const knownChildIds = Object.keys(
-      (await context.get<Record<string, ChildRecord>>(KEYS.children)) ?? {},
-    );
-    const result = step(instanceMachine, {
-      stored,
-      event,
-      isChild: h.parentKey != null,
-      knownChildIds,
-    });
-    await commit(h, result);
   }
 
   return restate.object({
@@ -126,38 +134,22 @@ export function createMachineObject<
     handlers: {
       create: async (context: restate.ObjectContext, input: InputFrom<M>) => {
         clearRuntimeState(context);
-        context.clear(KEYS.machineId);
-        context.clear(KEYS.parentKey);
-        context.clear(KEYS.invokeId);
-
+        clearIdentity(context);
         const h = await handlerCtx(context);
-        await commit(
-          h,
-          step(machine, {
-            stored: null,
-            input,
-            isChild: false,
-            knownChildIds: [],
-          }),
-        );
+        await commit(h, initialStep(machine, { input, isChild: false }));
       },
 
-      _init: restate.handlers.object.exclusive(
+      initChild: restate.handlers.object.exclusive(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, request: InitRequest) => {
           clearRuntimeState(context);
-          context.set(KEYS.machineId, request.machineId);
-          context.set(KEYS.parentKey, request.parentKey);
-          context.set(KEYS.invokeId, request.invokeId);
-
+          setIdentity(context, request);
           const h = await handlerCtx(context);
           await commit(
             h,
-            step(getMachine(request.machineId), {
-              stored: null,
+            initialStep(getMachine(request.machineId), {
               input: request.input,
               isChild: true,
-              knownChildIds: [],
             }),
           );
         },
@@ -169,18 +161,15 @@ export function createMachineObject<
         await applyEvent(context, event);
       },
 
-      _scheduled: restate.handlers.object.exclusive(
+      deliverScheduled: restate.handlers.object.exclusive(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, request: ScheduledEvent) => {
-          const scheduled =
-            (await context.get<Record<string, ScheduledDelivery>>(
-              KEYS.scheduled,
-            )) ?? {};
+          const scheduled = await getScheduled(context);
           const entry = scheduled[request.sendId];
           if (!entry || entry.uuid !== request.uuid) return;
 
           delete scheduled[request.sendId];
-          context.set(KEYS.scheduled, scheduled);
+          setScheduled(context, scheduled);
 
           if (entry.targetKey === context.key) {
             await applyEvent(context, entry.event as EventFrom<M>);
@@ -190,15 +179,13 @@ export function createMachineObject<
         },
       ),
 
-      _execute: restate.handlers.object.shared(
+      executeActor: restate.handlers.object.shared(
         { ingressPrivate: true, enableLazyState: true },
         async (
           context: restate.ObjectSharedContext,
           request: ExecuteRequest,
         ) => {
-          const instanceMachine = getMachine(
-            await context.get<string>(KEYS.machineId),
-          );
+          const instanceMachine = getMachine(await getMachineId(context));
           const event = await runActor(
             instanceMachine,
             request.params,
@@ -213,10 +200,8 @@ export function createMachineObject<
       ): Promise<ReturnedSnapshot> => {
         await validateNotDisposed(context);
         await validateExists(context);
-        const instanceMachine = getMachine(
-          await context.get<string>(KEYS.machineId),
-        );
-        const stored = (await context.get<StoredState>(KEYS.state))!;
+        const instanceMachine = getMachine(await getMachineId(context));
+        const stored = (await getState(context))!;
         return toReturnedSnapshot(fromStored(instanceMachine, stored));
       },
 
@@ -228,10 +213,8 @@ export function createMachineObject<
         await validateExists(context);
         validateCondition(request.condition);
 
-        const instanceMachine = getMachine(
-          await context.get<string>(KEYS.machineId),
-        );
-        const stored = (await context.get<StoredState>(KEYS.state))!;
+        const instanceMachine = getMachine(await getMachineId(context));
+        const stored = (await getState(context))!;
         const returned = toReturnedSnapshot(
           fromStored(instanceMachine, stored),
         );
@@ -245,10 +228,7 @@ export function createMachineObject<
           return;
         }
 
-        const subscriptions =
-          (await context.get<Record<string, Subscription>>(
-            KEYS.subscriptions,
-          )) ?? {};
+        const subscriptions = await getSubscriptions(context);
         const existing = subscriptions[request.condition];
         if (existing) {
           existing.awakeables.push(request.awakeableId);
@@ -257,7 +237,7 @@ export function createMachineObject<
             awakeables: [request.awakeableId],
           };
         }
-        context.set(KEYS.subscriptions, subscriptions);
+        setSubscriptions(context, subscriptions);
       },
 
       waitFor: restate.handlers.object.shared(
@@ -296,8 +276,7 @@ export function createMachineObject<
       cleanupState: restate.handlers.object.exclusive(
         { ingressPrivate: true },
         async (context: restate.ObjectContext) => {
-          context.clearAll();
-          context.set(KEYS.disposed, true);
+          markDisposedAndClear(context);
         },
       ),
     } satisfies MachineVirtualObject<M>,

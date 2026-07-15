@@ -8,5 +8,4 @@ export type {
   WaitForRequest,
   SubscribeRequest,
 } from "./restate/types";
-export type { StoredState, ReturnedSnapshot } from "./xstate/snapshot";
-export type { Condition } from "./xstate/conditions";
+export type { StoredState, ReturnedSnapshot, Condition } from "./xstate/types";

@@ -1,16 +1,9 @@
-import type { ReturnedSnapshot } from "./snapshot";
+import type { Condition, ConditionOutcome, ReturnedSnapshot } from "./types";
 
-/** A condition that `waitFor`/`subscribe` can wait on. */
-export type Condition = "done" | `hasTag:${string}`;
-
-/** The pure outcome of evaluating a condition against a settled snapshot. */
-export type ConditionOutcome =
-  | { status: "pending" }
-  | { status: "resolve"; snapshot: ReturnedSnapshot }
-  | { status: "reject"; reason: string };
+const HAS_TAG = "hasTag:";
 
 export function isValidCondition(condition: string): condition is Condition {
-  return condition === "done" || condition.startsWith("hasTag:");
+  return condition === "done" || condition.startsWith(HAS_TAG);
 }
 
 /**
@@ -27,8 +20,8 @@ export function evaluateCondition(
   }
 
   if (
-    condition.startsWith("hasTag:") &&
-    snapshot.tags.includes(condition.slice("hasTag:".length))
+    condition.startsWith(HAS_TAG) &&
+    snapshot.tags.includes(condition.slice(HAS_TAG.length))
   ) {
     return { status: "resolve", snapshot };
   }

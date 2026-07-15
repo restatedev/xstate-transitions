@@ -8,14 +8,22 @@ import type {
 /** Sentinel marking a Restate-aware promise actor (see restate/promise.ts). */
 export const RESTATE_PROMISE_ACTOR = "restate.promise.actor";
 
-export function isRestatePromiseActor(logic: unknown): logic is {
+/** A Restate-aware promise actor: an xstate logic carrying our creator. */
+export interface RestatePromiseActor {
   sentinel: typeof RESTATE_PROMISE_ACTOR;
   config: (args: { input: unknown; ctx: unknown }) => unknown;
-} {
+}
+
+export function isRestatePromiseActor(
+  logic: unknown,
+): logic is RestatePromiseActor {
+  if (typeof logic !== "object" || logic === null) return false;
+  const candidate = logic as Partial<RestatePromiseActor>;
+  // Check `config` too: the predicate claims it is callable, so verify it —
+  // otherwise a mistagged value would pass and blow up when we call config().
   return (
-    typeof logic === "object" &&
-    logic !== null &&
-    (logic as { sentinel?: unknown }).sentinel === RESTATE_PROMISE_ACTOR
+    candidate.sentinel === RESTATE_PROMISE_ACTOR &&
+    typeof candidate.config === "function"
   );
 }
 

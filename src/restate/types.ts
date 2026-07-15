@@ -1,7 +1,10 @@
 import type { AnyStateMachine, EventFrom, InputFrom } from "xstate";
-import type { ObjectOptions } from "@restatedev/restate-sdk";
-import type { ReturnedSnapshot } from "../xstate/snapshot";
-import type { SpawnParams } from "../xstate/interpret";
+import type {
+  ObjectContext,
+  VirtualObjectDefinition,
+  ObjectOptions,
+} from "@restatedev/restate-sdk";
+import type { ReturnedSnapshot, SpawnParams } from "../xstate/types";
 
 export type MachineObjectOptions = {
   /**
@@ -68,8 +71,25 @@ export type MachineVirtualObject<M extends AnyStateMachine> = {
     request: WaitForRequest<M>,
   ) => Promise<ReturnedSnapshot>;
   subscribe: (context: any, request: SubscribeRequest) => Promise<void>;
-  _execute: (context: any, request: ExecuteRequest) => Promise<void>;
-  _scheduled: (context: any, request: ScheduledEvent) => Promise<void>;
-  _init: (context: any, request: InitRequest) => Promise<void>;
+  executeActor: (context: any, request: ExecuteRequest) => Promise<void>;
+  deliverScheduled: (context: any, request: ScheduledEvent) => Promise<void>;
+  initChild: (context: any, request: InitRequest) => Promise<void>;
   cleanupState: (context: any) => Promise<void>;
 };
+
+/** A reference to this virtual object's definition, used to build clients. */
+export type MachineDefinition = VirtualObjectDefinition<
+  string,
+  MachineVirtualObject<AnyStateMachine>
+>;
+
+/** The bundle of state an effect executor needs to act against Restate. */
+export interface HandlerCtx {
+  ctx: ObjectContext;
+  self: MachineDefinition;
+  /** Set only for a child instance: the parent's object key. */
+  parentKey?: string;
+  /** Set only for a child instance: the invoke/spawn id it runs under. */
+  invokeId?: string;
+  finalStateTTL?: number;
+}

@@ -1,9 +1,5 @@
-import {
-  createActor,
-  toPromise,
-  type AnyActorLogic,
-  type AnyStateMachine,
-} from "xstate";
+import { createActor, toPromise } from "xstate";
+import type { AnyActorLogic, AnyStateMachine } from "xstate";
 import * as restate from "@restatedev/restate-sdk";
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
 import {
@@ -12,7 +8,7 @@ import {
   createDoneActorEvent,
   createErrorActorEvent,
 } from "../xstate/actors";
-import type { SpawnParams } from "../xstate/interpret";
+import type { SpawnParams } from "../xstate/types";
 
 /**
  * Run an invoked/spawned actor out-of-band and produce the done/error event to

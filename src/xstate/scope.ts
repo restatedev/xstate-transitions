@@ -1,10 +1,6 @@
-import {
-  createActor,
-  initialTransition,
-  transition,
-  type AnyStateMachine,
-  type AnyMachineSnapshot,
-} from "xstate";
+import { createActor, initialTransition, transition } from "xstate";
+import type { AnyStateMachine, AnyMachineSnapshot } from "xstate";
+import type { Action } from "./types";
 
 // ---------------------------------------------------------------------------
 // This module groups all the "fake" actor plumbing needed to drive a machine
@@ -16,10 +12,45 @@ import {
 //   - runInitial / runTransition: pure transition entry points, using a
 //     parent-aware actor scope for child machines.
 // None of this imports Restate; it is all pure XState.
+//
+// The casts here reach into xstate internals that its public types do not
+// expose. The shapes we touch are named below so the reaches are explicit.
 // ---------------------------------------------------------------------------
 
 /** xstate's SpecialTargets.Parent id — the `to`/`targetId` of a sendParent action. */
 export const PARENT_ID = "#_parent";
+
+/** The subset of a live actor we mutate/read when building a parent-aware scope. */
+interface MutableActor {
+  _parent: unknown;
+  system: { _sendInspectionEvent: () => void };
+}
+
+/** The inert actor scope xstate's transition functions expect. */
+interface ActorScope {
+  self: MutableActor;
+  system: unknown;
+  actionExecutor: (action: Action) => void;
+  defer: () => void;
+  id: string;
+  logger: () => void;
+  sessionId: string;
+  stopChild: () => void;
+  emit: () => void;
+}
+
+/** The internals of a machine we drive directly with a custom scope. */
+interface MachineInternals {
+  getInitialSnapshot: (scope: ActorScope, input: unknown) => AnyMachineSnapshot;
+  transition: (
+    snapshot: AnyMachineSnapshot,
+    event: unknown,
+    scope: ActorScope,
+  ) => AnyMachineSnapshot;
+}
+
+const internalsOf = (machine: AnyStateMachine): MachineInternals =>
+  machine as unknown as MachineInternals;
 
 // The pure transition() API builds an inert scope with no parent, so
 // `sendParent`/`sendTo(parent)` would throw ("Unable to send event to actor
@@ -57,31 +88,25 @@ export function stubChildRef(id: string): unknown {
   };
 }
 
-type Action = { type: string; params: Record<string, unknown> };
-
+/** Build an inert scope whose actor has a fake parent, collecting emitted actions. */
 function parentScope(
-  logic: AnyStateMachine,
-  sink: (a: Action) => void,
-): unknown {
-  const self = createActor(logic) as unknown as {
-    _parent: unknown;
-    system: unknown;
-  };
+  machine: AnyStateMachine,
+  sink: (action: Action) => void,
+): ActorScope {
+  const self = createActor(machine) as unknown as MutableActor;
   self._parent = FAKE_PARENT;
-  const scope = {
+  self.system._sendInspectionEvent = () => {};
+  return {
     self,
+    system: self.system,
+    actionExecutor: sink,
     defer: () => {},
     id: "",
     logger: () => {},
     sessionId: "",
     stopChild: () => {},
-    system: self.system,
     emit: () => {},
-    actionExecutor: (action: Action) => sink(action),
   };
-  (scope.system as { _sendInspectionEvent: () => void })._sendInspectionEvent =
-    () => {};
-  return scope;
 }
 
 /**
@@ -97,12 +122,8 @@ export function runInitial(
     return initialTransition(machine, input) as [AnyMachineSnapshot, Action[]];
   }
   const actions: Action[] = [];
-  const scope = parentScope(machine, (a) => actions.push(a));
-  const snapshot = (
-    machine as unknown as {
-      getInitialSnapshot: (s: unknown, i: unknown) => AnyMachineSnapshot;
-    }
-  ).getInitialSnapshot(scope, input);
+  const scope = parentScope(machine, (action) => actions.push(action));
+  const snapshot = internalsOf(machine).getInitialSnapshot(scope, input);
   return [snapshot, actions];
 }
 
@@ -123,11 +144,7 @@ export function runTransition(
     ];
   }
   const actions: Action[] = [];
-  const scope = parentScope(machine, (a) => actions.push(a));
-  const next = (
-    machine as unknown as {
-      transition: (s: unknown, e: unknown, sc: unknown) => AnyMachineSnapshot;
-    }
-  ).transition(snapshot, event, scope);
+  const scope = parentScope(machine, (action) => actions.push(action));
+  const next = internalsOf(machine).transition(snapshot, event, scope);
   return [next, actions];
 }
