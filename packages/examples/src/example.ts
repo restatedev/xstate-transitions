@@ -9,7 +9,6 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import * as restate from "@restatedev/restate-sdk";
 import { setup, types } from "xstate";
 import {
   createMachineObject,
@@ -161,8 +160,6 @@ export const workflow = setup({
   },
 });
 
-const machineObject = createMachineObject("default", workflow, {
+export const payment = createMachineObject("payment", workflow, {
   journalRetention: { days: 1 },
 });
-
-restate.endpoint().bind(machineObject).listen();
