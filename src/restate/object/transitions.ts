@@ -1,7 +1,7 @@
 import type * as restate from "@restatedev/restate-sdk";
 import type { AnyEventObject, AnyStateMachine, InputFrom } from "xstate";
 import { initialStep, resumeStep } from "../../xstate/interpret";
-import type { Step, StoredState } from "../../xstate/types";
+import type { ResumeInput, Step, StoredState } from "../../xstate/types";
 import {
   executeEffects,
   maybeScheduleCleanup,
@@ -22,11 +22,10 @@ import {
   setIdentity,
   setState,
 } from "../state";
-import type { HandlerContext, InitRequest } from "../types";
-import type { KnownActors } from "./actor-state";
-import { classifyKnownActors } from "./actor-state";
-import type { MachineObjectRuntime } from "./runtime";
-import { resolveMachine } from "./runtime";
+import type { ChildRecord, HandlerContext, InitRequest } from "../types";
+import type { MachineRuntime } from "./runtime";
+
+type KnownActors = Pick<ResumeInput, "knownChildIds" | "knownPromiseIds">;
 
 interface LoadedInstance {
   readonly stored: StoredState;
@@ -35,9 +34,22 @@ interface LoadedInstance {
   readonly knownActors: KnownActors;
 }
 
+/** Classify persisted actor records for XState snapshot restoration. */
+export function classifyKnownActors(
+  children: Readonly<Record<string, ChildRecord>>,
+  actorExecutions: Readonly<Record<string, string>>,
+): KnownActors {
+  const knownChildIds = Object.keys(children);
+  const knownPromiseIds = Object.keys(actorExecutions).filter(
+    (actorId) => !Object.hasOwn(children, actorId),
+  );
+
+  return { knownChildIds, knownPromiseIds };
+}
+
 /** Start or replace a root instance from its initial transition. */
 export async function initializeRoot<M extends AnyStateMachine>(
-  runtime: MachineObjectRuntime<M>,
+  runtime: MachineRuntime<M>,
   context: restate.ObjectContext,
   input: InputFrom<M>,
 ): Promise<void> {
@@ -53,7 +65,7 @@ export async function initializeRoot<M extends AnyStateMachine>(
 
 /** Start or replace a child instance and persist its parent identity. */
 export async function initializeChild(
-  runtime: MachineObjectRuntime,
+  runtime: MachineRuntime,
   context: restate.ObjectContext,
   request: InitRequest,
 ): Promise<void> {
@@ -62,7 +74,7 @@ export async function initializeChild(
 
   const handler = await buildHandlerContext(runtime, context);
   const result = await computeStep(context, "initChild", () =>
-    initialStep(resolveMachine(runtime, request.machineId), {
+    initialStep(runtime.resolveMachine(request.machineId), {
       input: request.input,
       isChild: true,
     }),
@@ -72,7 +84,7 @@ export async function initializeChild(
 
 /** Apply one event to an existing instance; missing internal targets are no-ops. */
 export async function applyEvent(
-  runtime: MachineObjectRuntime,
+  runtime: MachineRuntime,
   context: restate.ObjectContext,
   event: AnyEventObject,
 ): Promise<void> {
@@ -98,7 +110,7 @@ export async function consumeActorExecution(
 }
 
 async function buildHandlerContext(
-  runtime: MachineObjectRuntime,
+  runtime: MachineRuntime,
   context: restate.ObjectContext,
 ): Promise<HandlerContext> {
   const parentKey = await getParentKey(context);
@@ -118,14 +130,14 @@ async function buildHandlerContext(
 }
 
 async function loadInstance(
-  runtime: MachineObjectRuntime,
+  runtime: MachineRuntime,
   context: restate.ObjectContext,
 ): Promise<LoadedInstance | null> {
   const stored = await getState(context);
   if (stored === null) return null;
 
   const handler = await buildHandlerContext(runtime, context);
-  const machine = resolveMachine(runtime, await getMachineId(context));
+  const machine = runtime.resolveMachine(await getMachineId(context));
   const children = await getChildren(context);
   const actorExecutions = await getActorExecutions(context);
 

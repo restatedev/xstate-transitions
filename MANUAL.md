@@ -1126,13 +1126,9 @@ For an XState upgrade:
 | [`src/xstate/actors.ts`](src/xstate/actors.ts)                           | Actor-source resolution, sentinel detection, error/event helpers |
 | [`src/restate/contracts.ts`](src/restate/contracts.ts)                   | Pure runtime-contract parsing and public-event classification    |
 | [`src/restate/object.ts`](src/restate/object.ts)                         | Public virtual-object facade                                     |
-| [`src/restate/object/definition.ts`](src/restate/object/definition.ts)   | SDK handler wiring and object-definition composition             |
+| [`src/restate/object/definition.ts`](src/restate/object/definition.ts)   | Handler class, ingress policy, and object-definition composition |
 | [`src/restate/object/runtime.ts`](src/restate/object/runtime.ts)         | Immutable machine registry, self-reference, and object options   |
-| [`src/restate/object/transitions.ts`](src/restate/object/transitions.ts) | Durable transition loading, computation, and commit pipeline     |
-| [`src/restate/object/handlers.ts`](src/restate/object/handlers.ts)       | Named public and internal endpoint operations                    |
-| [`src/restate/object/actor-state.ts`](src/restate/object/actor-state.ts) | Pure persisted-actor classification                              |
-| [`src/restate/object/validation.ts`](src/restate/object/validation.ts)   | Pure ingress and option validation                               |
-| [`src/restate/object/guards.ts`](src/restate/object/guards.ts)           | Stateful instance-existence and disposal guards                  |
+| [`src/restate/object/transitions.ts`](src/restate/object/transitions.ts) | Durable transition/commit core and actor-state classification    |
 | [`src/restate/effects.ts`](src/restate/effects.ts)                       | Abstract-effect execution, waiter settlement, terminal reporting |
 | [`src/restate/state.ts`](src/restate/state.ts)                           | Named accessors for all durable KV state                         |
 | [`src/restate/promise.ts`](src/restate/promise.ts)                       | Public Restate-aware `fromPromise` adapter                       |
