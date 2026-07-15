@@ -9,6 +9,9 @@ This largely follows this structure:
 
 https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570
 
+For setup, modeling guidance, supported behavior, testing strategy, and a tour
+of the implementation, see the **[XState + Restate Integration Manual](MANUAL.md)**.
+
 ### Run tests
 
 ```sh
