@@ -157,12 +157,23 @@ function interpretActions(
   const activePromises = new Set(knownPromiseIds);
   const effects: Effect[] = [];
 
-  // Actors (re)started this step. XState v6 emits `@xstate.spawn` for every
-  // invoke/spawn (it carries the id, resolved input, and `src`/`logic`).
+  // Actors (re)started and explicitly stopped this step. XState v6 emits
+  // `@xstate.spawn` for every invoke/spawn (id, resolved input, `src`/`logic`),
+  // and `@xstate.stop` when a transition stops an actor via `enq.stop(ref)`.
   const spawned = new Map<string, SpawnExecutableActionObject>();
+  const stoppedIds = new Set<string>();
   for (const action of actions) {
-    if (isBuiltInExecutableAction(action) && action.type === "@xstate.spawn") {
+    if (!isBuiltInExecutableAction(action)) continue;
+    if (action.type === "@xstate.spawn") {
       spawned.set(action.id, action);
+    } else if (action.type === "@xstate.stop") {
+      // XState removes a stopped actor from `snapshot.children` by ref identity.
+      // After snapshot rehydration a stop whose ref came from context (a
+      // JSON-revived object) no longer matches the injected stub child, so that
+      // removal silently no-ops and the children diff below would miss it. Honor
+      // the explicit stop by id so the actor is torn down regardless.
+      const stoppedId = action.actor?.id;
+      if (stoppedId !== undefined) stoppedIds.add(stoppedId);
     }
   }
 
@@ -170,31 +181,31 @@ function interpretActions(
   //    invoke's state is exited — the actor simply disappears from the
   //    post-transition `snapshot.children`. A reentered actor stays in children
   //    but is re-spawned this step, so a fresh spawn also implies stopping the
-  //    prior incarnation. Stopping here removes it from the active sets; step 2
-  //    re-adds a reentered actor as a start, yielding stop-then-start.
+  //    prior incarnation. An explicit `@xstate.stop` is honored even when the
+  //    child is still listed (see above). Stopping here removes it from the
+  //    active sets; step 2 re-adds a reentered actor as a start (stop-then-start).
   const liveChildren = childIdsOf(snapshot);
+  const isStopped = (id: string): boolean =>
+    !liveChildren.has(id) || spawned.has(id) || stoppedIds.has(id);
   for (const childId of knownChildIds) {
-    if (
-      (!liveChildren.has(childId) || spawned.has(childId)) &&
-      activeChildren.delete(childId)
-    ) {
+    if (isStopped(childId) && activeChildren.delete(childId)) {
       effects.push({ kind: "stopChild", childId });
     }
   }
   for (const actorId of knownPromiseIds) {
-    if (
-      (!liveChildren.has(actorId) || spawned.has(actorId)) &&
-      activePromises.delete(actorId)
-    ) {
+    if (isStopped(actorId) && activePromises.delete(actorId)) {
       effects.push({ kind: "stopPromise", actorId });
     }
   }
 
   // 2. Start newly spawned/invoked actors. The `src`/`logic` tell a child
   //    machine (its own virtual object) from a promise/handler actor (run
-  //    out-of-band).
+  //    out-of-band). A spawn that XState cancelled within this same macrostep
+  //    (spawn-then-stop) is absent from the settled children; starting it would
+  //    run an effect XState discarded, so only start spawns that survive.
   for (const [id, action] of spawned) {
     if (activeChildren.has(id) || activePromises.has(id)) continue;
+    if (!liveChildren.has(id)) continue;
 
     const childMachine = resolveChildMachine(machine, action.src, action.logic);
     if (childMachine !== undefined) {

@@ -172,6 +172,23 @@ describe("initialStep()", () => {
       byKind(initialStep(child, { isChild: true }).effects, "startChild"),
     ).toMatchObject([{ childId: "grandchild", machineId: "grandchild" }]);
   });
+
+  it("does not start an actor spawned and stopped in the same macrostep", () => {
+    // A transition that spawns then stops the same ref leaves it out of the
+    // settled snapshot's children; the integration must not run its effect.
+    const work = createAsyncLogic({ run: async () => "must-not-run" });
+    const machine = setup({ actorSources: { work } }).createMachine({
+      id: "m",
+      context: {},
+      entry: (_, enq) => {
+        const ref = enq.spawn(work, { id: "work" });
+        enq.stop(ref);
+      },
+    });
+    const result = initialStep(machine, { isChild: false });
+    expect(byKind(result.effects, "runPromise")).toHaveLength(0);
+    expect(byKind(result.effects, "startChild")).toHaveLength(0);
+  });
 });
 
 describe("resumeStep() — events and routing", () => {
@@ -487,6 +504,46 @@ describe("resumeStep() — events and routing", () => {
         kind: "runPromise",
         params: expect.objectContaining({ id: "work" }),
       }),
+    ]);
+  });
+
+  it("stops a child explicitly stopped via a context-held ref after rehydration", () => {
+    // The stored ref is a JSON-revived object, so it no longer matches the
+    // injected stub and XState's identity-based removal leaves the child in
+    // `snapshot.children`. The explicit @xstate.stop action must still tear it
+    // down, otherwise the child leaks and its later completion is accepted.
+    const child = createMachine({
+      id: "child",
+      initial: "a",
+      states: { a: {} },
+    });
+    const parent = setup({ actorSources: { child } }).createMachine({
+      id: "parent",
+      context: { ref: undefined as unknown },
+      initial: "running",
+      states: {
+        running: {
+          entry: (_, enq) => ({
+            context: { ref: enq.spawn(child, { id: "kid" }) },
+          }),
+          on: {
+            STOP: ({ context }, enq) => {
+              enq.stop(context.ref as never);
+            },
+          },
+        },
+      },
+    });
+    const created = initialStep(parent, { isChild: false });
+    const stopped = resumeStep(parent, {
+      stored: created.nextState,
+      event: { type: "STOP" },
+      isChild: false,
+      knownChildIds: ["kid"],
+      knownPromiseIds: [],
+    });
+    expect(byKind(stopped.effects, "stopChild")).toEqual([
+      { kind: "stopChild", childId: "kid" },
     ]);
   });
 });
