@@ -11,15 +11,9 @@
 
 import { it } from "vitest";
 
-import { assign, setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { describeE2E } from "./harness";
-
-/**
- * Need to make the type inference work for workflow
- * https://github.com/statelyai/xstate/issues/5090#issuecomment-2493180191
- */
-import "xstate/guards";
 import { eventually } from "./eventually.js";
 
 const delay = (ms: number): Promise<void> => {
@@ -31,27 +25,17 @@ let global_report = {};
 
 // https://github.com/serverlessworkflow/specification/blob/main/examples/README.md#accumulate-room-readings
 export const workflow = setup({
-  types: {} as {
-    events:
-      | {
-          type: "TemperatureEvent";
-          roomId: string;
-          temperature: number;
-        }
-      | {
-          type: "HumidityEvent";
-          roomId: string;
-          humidity: number;
-        };
-    context: {
+  schemas: {
+    events: {
+      TemperatureEvent: types<{ roomId: string; temperature: number }>(),
+      HumidityEvent: types<{ roomId: string; humidity: number }>(),
+    },
+    context: types<{
       temperature: number | null;
       humidity: number | null;
-    };
+    }>(),
   },
-  delays: {
-    PT1H: 1_000,
-  },
-  actors: {
+  actorSources: {
     produceReport: fromPromise(
       ({
         input,
@@ -76,28 +60,21 @@ export const workflow = setup({
   },
   states: {
     ConsumeReading: {
-      entry: assign({
-        temperature: null,
-        humidity: null,
-      }),
+      entry: () => ({ context: { temperature: null, humidity: null } }),
       on: {
-        TemperatureEvent: {
-          actions: assign({
-            temperature: ({ event }) => event.temperature,
-          }),
-        },
-        HumidityEvent: {
-          actions: assign({
-            humidity: ({ event }) => event.humidity,
-          }),
-        },
+        TemperatureEvent: ({ event }) => ({
+          context: { temperature: event.temperature },
+        }),
+        HumidityEvent: ({ event }) => ({
+          context: { humidity: event.humidity },
+        }),
       },
       after: {
-        PT1H: {
-          guard: ({ context }) =>
-            context.temperature !== null && context.humidity !== null,
-          target: "GenerateReport",
-        },
+        // PT1H in the spec, mocked to 1s for the test.
+        1_000: ({ context }) =>
+          context.temperature !== null && context.humidity !== null
+            ? { target: "GenerateReport" }
+            : undefined,
       },
     },
     GenerateReport: {

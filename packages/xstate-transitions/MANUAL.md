@@ -1,14 +1,15 @@
 # XState + Restate Integration Manual
 
-This manual explains how to run XState v5 machines as durable Restate virtual
+This manual explains how to run XState v6 machines as durable Restate virtual
 objects. The first half is a user guide; the second half describes the
 implementation, durability model, and testing strategy.
 
 > [!IMPORTANT]
 > This repository is currently an experiment rather than a published package.
 > Its integration layer also depends on XState internals and therefore pins
-> XState to `5.32.4`. Treat an XState upgrade as an integration change that
-> requires the full test suite.
+> XState exactly — currently `6.0.0-alpha.21` (XState v6 is still in alpha).
+> Treat an XState upgrade as an integration change that requires the full test
+> suite.
 
 ## Contents
 
@@ -82,7 +83,7 @@ Restate `ctx` (as below, which journals a `fetch` with `ctx.run`); use
 ```ts
 import * as restate from "@restatedev/restate-sdk";
 import * as z from "zod";
-import { assign, setup } from "xstate";
+import { setup, types } from "xstate";
 import { createMachineObject, fromHandler } from "./src";
 
 const OrderInputSchema = z.object({
@@ -133,12 +134,15 @@ const reserveInventory = fromHandler<ReserveOutput, ReserveInput>(
 );
 
 export const orderMachine = setup({
-  types: {
-    input: {} as OrderInput,
-    context: {} as OrderContext,
-    events: {} as OrderEvent,
+  schemas: {
+    input: types<OrderInput>(),
+    context: types<OrderContext>(),
+    events: {
+      SUBMIT: types<Record<string, never>>(),
+      CANCEL: types<Record<string, never>>(),
+    },
   },
-  actors: {
+  actorSources: {
     reserveInventory,
   },
 }).createMachine({
@@ -148,8 +152,8 @@ export const orderMachine = setup({
   states: {
     draft: {
       on: {
-        SUBMIT: "reserving",
-        CANCEL: "cancelled",
+        SUBMIT: { target: "reserving" },
+        CANCEL: { target: "cancelled" },
       },
     },
     reserving: {
@@ -162,15 +166,12 @@ export const orderMachine = setup({
         }),
         onDone: {
           target: "confirmed",
-          actions: assign({
-            reservationId: ({ event }) => event.output.reservationId,
-          }),
+          context: ({ output }) => ({ reservationId: output.reservationId }),
         },
         onError: {
           target: "failed",
-          actions: assign({
-            failure: ({ event }) =>
-              event.error as { name: string; message: string },
+          context: ({ event }) => ({
+            failure: event.error as { name: string; message: string },
           }),
         },
       },
@@ -196,8 +197,8 @@ const orders = createMachineObject("orders", orderMachine, {
 restate.endpoint().bind(orders).listen();
 ```
 
-The integration exposes two actor factories, and vanilla XState `fromPromise`
-remains usable:
+The integration exposes two actor factories, and vanilla XState actors
+(`createAsyncLogic`, etc.) remain usable:
 
 ```ts
 // Ctx-less durable effect: fail-fast, or retryable with fromPromise(fn, { retry }).
@@ -207,7 +208,7 @@ import { fromPromise } from "./src";
 import { fromHandler } from "./src";
 
 // Ordinary XState promise actor: no ctx (still run durably by the runtime).
-import { fromPromise } from "xstate";
+import { createAsyncLogic } from "xstate";
 ```
 
 Prefer the integration's version whenever the actor performs I/O or needs
@@ -285,9 +286,8 @@ type Input = z.infer<typeof Input>;
 type Event = z.infer<typeof Event>;
 
 const machine = setup({
-  types: {
-    input: {} as Input,
-    events: {} as Event,
+  schemas: {
+    input: types<Input>(),
   },
 }).createMachine({
   // ...
@@ -484,19 +484,15 @@ Restate delayed calls. Restate owns the clock, so the Node.js process does not
 need to remain alive while a timer is pending.
 
 ```ts
-import { cancel, sendTo } from "xstate";
-
 const machine = setup({
   // ...
 }).createMachine({
-  entry: sendTo(
-    ({ self }) => self,
-    { type: "REMIND" },
-    { id: "reminder", delay: 60_000 },
-  ),
+  entry: ({ self }, enq) => {
+    enq.sendTo(self, { type: "REMIND" }, { id: "reminder", delay: 60_000 });
+  },
   on: {
-    FINISH: {
-      actions: cancel("reminder"),
+    FINISH: (_, enq) => {
+      enq.cancel("reminder");
     },
   },
 });
@@ -572,11 +568,12 @@ machine definitions recursively from `setup({ actors })` and direct
 
 Supported routing includes:
 
-- `sendTo(self, event)` for self-messaging;
-- `sendTo(child, event)` for a known child;
-- `forwardTo(child)`;
-- `sendParent(event)` from a child; and
-- delayed `sendTo` for supported targets.
+- `enq.sendTo(self, event)` for self-messaging;
+- `enq.sendTo(children.<id>, event)` for a known child (also how `forwardTo` is
+  expressed in v6);
+- `enq.sendTo(parent, event)` from a child (v6's replacement for `sendParent`);
+  and
+- delayed `enq.sendTo(..., { delay })` for supported targets.
 
 When an invoked child reaches `done` or `error`, it reports the appropriate
 XState actor event to its parent exactly once. Exiting an invoke stops and
@@ -657,21 +654,22 @@ repository, not every feature available in XState itself.
 | Promise `invoke` and `spawn`                       | Supported              | `fromPromise`/`fromHandler`; all run inside `ctx.run`   |
 | Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                      |
 | Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance        |
-| `sendTo`, `forwardTo`, `sendParent`                | Supported targets only | Self, known child, and parent routing                   |
-| `after`, delayed `raise`, delayed `sendTo`         | Supported              | Implemented with Restate delayed calls                  |
-| `cancel(id)`                                       | Supported              | Uses a durable delivery token                           |
+| `enq.sendTo` (self / child / parent)               | Supported targets only | Self, known child, and parent routing                   |
+| `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                  |
+| `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                           |
 | `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`                |
 | Standard Schema input/event contracts              | Integration feature    | Recommended for every public ingress boundary           |
 | Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone |
-| Arbitrary executable XState actions                | **Not supported**      | Unknown/custom action effects are not executed          |
-| Callback actors (`fromCallback`)                   | **Not supported**      | No long-lived in-process actor exists                   |
+| Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed          |
+| Callback actors (`createCallbackLogic`)            | **Not supported**      | No long-lived in-process actor exists                   |
 | Observable actors and other long-lived actor logic | Not guaranteed         | Only tested actor patterns should be relied upon        |
 | Arbitrary actor-system addressing                  | **Not supported**      | Routing is limited to self, parent, and known children  |
 
-The custom-action limitation is especially important. A declaration such as
-`actions: "sendEmail"` may type-check in XState, but this integration does not
-execute that arbitrary action implementation. Put the operation in an invoked
-or spawned promise actor so it becomes an explicit durable effect boundary.
+The custom-action limitation is especially important. An arbitrary effect
+enqueued as `enq(sendEmail)` may type-check in XState, but this integration does
+not execute that custom action implementation (only the built-in `@xstate.*`
+effects are interpreted). Put the operation in an invoked or spawned promise
+actor so it becomes an explicit durable effect boundary.
 
 Callback actors conflict with the stateless-between-requests architecture. For
 push sources, either send events into the object from an external Restate
@@ -1298,7 +1296,7 @@ All KV access is centralized in [`src/restate/state.ts`](src/restate/state.ts).
 | `cleanupToken`    | cleanup execution ID            | Rejects final-state cleanup from an older instance            |
 | `reported`        | `boolean`                       | Prevents duplicate terminal reports from a child              |
 | `machineId`       | `string`                        | Selects child machine logic from the registry                 |
-| `parentKey`       | `string`                        | Routes `sendParent` and terminal reports                      |
+| `parentKey`       | `string`                        | Routes `enq.sendTo(parent, …)` and terminal reports           |
 | `invokeId`        | `string`                        | Builds the parent's XState actor result event                 |
 | `executionId`     | `string`                        | Identifies the current generation of a child instance         |
 

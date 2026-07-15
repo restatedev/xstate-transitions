@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { type SnapshotFrom, setup } from "xstate";
+import { type SnapshotFrom, setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -23,13 +23,13 @@ interface Order {
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#provision-orders-example
 export const workflow = setup({
-  types: {
-    context: {} as {
+  schemas: {
+    context: types<{
       order: Order;
-    },
-    input: {} as { order: Order },
+    }>(),
+    input: types<{ order: Order }>(),
   },
-  actors: {
+  actorSources: {
     provisionOrderFunction: fromPromise(
       async ({ input }: { input: { order: Order } }) => {
         console.log("starting provisionOrderFunction");
@@ -88,30 +88,21 @@ export const workflow = setup({
         input: ({ context }) => ({
           order: context.order,
         }),
-        onDone: "ApplyOrder",
-        onError: [
-          {
-            guard: ({ event }) =>
-              (event.error as Error).message === "Missing order id",
-            target: "Exception.MissingId",
-          },
-          {
-            guard: ({ event }) =>
-              (event.error as Error).message === "Missing order item",
-            target: "Exception.MissingItem",
-          },
-          {
-            guard: ({ event }) =>
-              (event.error as Error).message === "Missing order quantity",
-            target: "Exception.MissingQuantity",
-          },
-        ],
+        onDone: { target: "ApplyOrder" },
+        onError: ({ event }) =>
+          (event.error as Error).message === "Missing order id"
+            ? { target: "Exception.MissingId" }
+            : (event.error as Error).message === "Missing order item"
+              ? { target: "Exception.MissingItem" }
+              : (event.error as Error).message === "Missing order quantity"
+                ? { target: "Exception.MissingQuantity" }
+                : undefined,
       },
     },
     ApplyOrder: {
       invoke: {
         src: "applyOrderWorkflowId",
-        onDone: "End",
+        onDone: { target: "End" },
       },
     },
     End: {
@@ -123,26 +114,26 @@ export const workflow = setup({
         MissingId: {
           invoke: {
             src: "handleMissingIdExceptionWorkflow",
-            onDone: "End",
+            onDone: { target: "End" },
           },
         },
         MissingItem: {
           invoke: {
             src: "handleMissingItemExceptionWorkflow",
-            onDone: "End",
+            onDone: { target: "End" },
           },
         },
         MissingQuantity: {
           invoke: {
             src: "handleMissingQuantityExceptionWorkflow",
-            onDone: "End",
+            onDone: { target: "End" },
           },
         },
         End: {
           type: "final",
         },
       },
-      onDone: "End",
+      onDone: { target: "End" },
     },
   },
 });

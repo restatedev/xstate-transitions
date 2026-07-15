@@ -27,7 +27,7 @@ const machine = createMachine({
   id: "after-delay",
   initial: "waiting",
   states: {
-    waiting: { after: { [DELAY]: "done" } },
+    waiting: { after: { [DELAY]: { target: "done" } } },
     done: { type: "final" },
   },
 });

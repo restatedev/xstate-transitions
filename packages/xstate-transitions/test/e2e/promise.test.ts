@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -18,12 +18,12 @@ import { describeE2E } from "./harness";
 // from: https://raw.githubusercontent.com/statelyai/xstate/refs/heads/main/examples/workflow-async-function/main.ts
 
 export const workflow = setup({
-  types: {
-    input: {} as {
+  schemas: {
+    input: types<{
       customer: string;
-    },
+    }>(),
   },
-  actors: {
+  actorSources: {
     sendEmail: fromPromise(
       async ({ input }: { input: { customer: string } }) => {
         console.log("Sending email to", input.customer);
@@ -50,7 +50,7 @@ export const workflow = setup({
         input: ({ context }) => ({
           customer: context.customer,
         }),
-        onDone: "Email sent",
+        onDone: { target: "Email sent" },
       },
     },
     "Email sent": {

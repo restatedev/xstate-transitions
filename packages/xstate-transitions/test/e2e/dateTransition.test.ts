@@ -20,12 +20,11 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, createMachine } from "xstate";
+import { createMachine } from "xstate";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 const machine = createMachine({
-  types: {} as { context: { at: number } },
   id: "date-transition",
   context: { at: 0 },
   initial: "idle",
@@ -34,7 +33,7 @@ const machine = createMachine({
       on: {
         submit: {
           target: "done",
-          actions: assign({ at: () => Date.now() }),
+          context: () => ({ at: Date.now() }),
         },
       },
     },

@@ -16,8 +16,9 @@ import type { Action } from "./types";
 // ---------------------------------------------------------------------------
 // This module groups all the "fake" actor plumbing needed to drive a machine
 // through XState's PURE transition API in a stateless setting:
-//   - FAKE_PARENT: a stand-in parent ref so `sendParent` resolves to an action
-//     instead of throwing.
+//   - FAKE_PARENT: a stand-in parent ref so a child's `sendTo(parent, …)`
+//     resolves to a routable `@xstate.sendTo` action instead of a communication
+//     error.
 //   - stubChildRef: stand-in child refs (re-injected after resolveState drops
 //     live children) so `sendTo`/`forwardTo` targeting a child resolve.
 //   - runInitial / runTransition: pure transition entry points, using a
@@ -28,14 +29,14 @@ import type { Action } from "./types";
 // expose. The shapes we touch are named below so the reaches are explicit.
 // ---------------------------------------------------------------------------
 
-/** xstate's SpecialTargets.Parent id — the `to`/`targetId` of a sendParent action. */
+/** xstate's SpecialTargets.Parent id — the `id` of a routed sendTo(parent) target. */
 export const PARENT_ID = "#_parent";
 
-/** The subset of a live actor we mutate/read when building a parent-aware scope. */
+/** The subset of a live actor system we mutate/read when building a scope. */
 interface MutableActorSystem {
-  _sendInspectionEvent: () => void;
-  _unregister: (actor: unknown) => void;
-  getAll: () => Record<string, unknown>;
+  _sendInspectionEvent?: () => void;
+  _unregister?: (actor: unknown) => void;
+  getAll?: () => Record<string, unknown>;
 }
 
 interface MutableActor {
@@ -43,11 +44,14 @@ interface MutableActor {
   system: MutableActorSystem;
 }
 
-/** The inert actor scope xstate's transition functions expect. */
+/**
+ * The inert actor scope xstate's transition functions expect (v6 shape, mirror
+ * of core's internal `createInertActorScope`).
+ */
 interface ActorScope {
   self: MutableActor;
   system: unknown;
-  actionExecutor: (action: Action) => void;
+  actionExecutor: () => void;
   defer: () => void;
   id: string;
   logger: () => void;
@@ -56,24 +60,28 @@ interface ActorScope {
   emit: () => void;
 }
 
-/** The internals of a machine we drive directly with a custom scope. */
+/** The internals of a machine we drive directly with a parent-aware scope. */
 interface MachineInternals {
-  getInitialSnapshot: (scope: ActorScope, input: unknown) => AnyMachineSnapshot;
+  initialTransition: (
+    input: unknown,
+    scope: ActorScope,
+  ) => [AnyMachineSnapshot, Action[]];
   transition: (
     snapshot: AnyMachineSnapshot,
     event: unknown,
     scope: ActorScope,
-  ) => AnyMachineSnapshot;
+  ) => [AnyMachineSnapshot, Action[]];
 }
 
 const internalsOf = (machine: AnyStateMachine): MachineInternals =>
   machine as unknown as MachineInternals;
 
-// The pure transition() API builds an inert scope with no parent, so
-// `sendParent`/`sendTo(parent)` would throw ("Unable to send event to actor
-// '#_parent'"). Giving the throwaway actor a fake `_parent` makes XState resolve
-// those into ordinary `xstate.sendTo` actions (targetId #_parent) that the
-// integration routes to the parent object. Its identity is otherwise unused.
+// The pure transition() API builds an inert scope with no parent, so a child's
+// `sendTo(parent, …)` (v6's replacement for `sendParent`) would push a
+// communication-error event instead of a routable action. Giving the throwaway
+// actor a fake `_parent` makes XState resolve those into ordinary
+// `@xstate.sendTo` actions whose `target.id` is #_parent, which the integration
+// routes to the parent object. Its identity is otherwise unused.
 const FAKE_PARENT = {
   id: PARENT_ID,
   sessionId: PARENT_ID,
@@ -90,7 +98,7 @@ const FAKE_PARENT = {
  * A minimal stand-in for a child actor ref. `resolveState` drops live children,
  * so before transitioning we re-inject one of these per persisted child so that
  * `sendTo`/`forwardTo` targeting the child resolves to a routable action instead
- * of throwing. Only its `id` is used (for routing); it is never run.
+ * of a communication error. Only its `id` is used (for routing); it is never run.
  */
 export function stubChildRef(id: string): unknown {
   return {
@@ -105,26 +113,26 @@ export function stubChildRef(id: string): unknown {
   };
 }
 
-/** Build an inert scope whose actor has a fake parent, collecting emitted actions. */
-function parentScope(
-  machine: AnyStateMachine,
-  sink: (action: Action) => void,
-): ActorScope {
+/** Build an inert scope whose actor has a fake parent. */
+function parentScope(machine: AnyStateMachine): ActorScope {
   const self = createActor(machine) as unknown as MutableActor;
   self._parent = FAKE_PARENT;
   // createActor eagerly computes an initial snapshot. Actors with a systemId
   // are registered during that construction, then registered again when we
-  // explicitly call getInitialSnapshot/transition below. XState's own inert
+  // explicitly call initialTransition/transition below. XState's own inert
   // scope replaces the system for the same reason; removing the eager entries
   // gives this parent-aware scope equivalent isolation.
-  for (const actor of Object.values(self.system.getAll())) {
-    self.system._unregister(actor);
+  const all = self.system.getAll?.();
+  if (all) {
+    for (const actor of Object.values(all)) {
+      self.system._unregister?.(actor);
+    }
   }
   self.system._sendInspectionEvent = () => {};
   return {
     self,
     system: self.system,
-    actionExecutor: sink,
+    actionExecutor: () => {},
     defer: () => {},
     id: "",
     logger: () => {},
@@ -136,7 +144,8 @@ function parentScope(
 
 /**
  * Compute the initial transition. For a child machine, uses a parent-aware scope
- * so entry `sendParent` actions resolve; for a root, uses xstate's built-in.
+ * so entry `sendTo(parent, …)` actions resolve; for a root, uses xstate's
+ * built-in `initialTransition`.
  */
 export function runInitial(
   machine: AnyStateMachine,
@@ -146,10 +155,7 @@ export function runInitial(
   if (!asChild) {
     return initialTransition(machine, input) as [AnyMachineSnapshot, Action[]];
   }
-  const actions: Action[] = [];
-  const scope = parentScope(machine, (action) => actions.push(action));
-  const snapshot = internalsOf(machine).getInitialSnapshot(scope, input);
-  return [snapshot, actions];
+  return internalsOf(machine).initialTransition(input, parentScope(machine));
 }
 
 /**
@@ -168,8 +174,5 @@ export function runTransition(
       Action[],
     ];
   }
-  const actions: Action[] = [];
-  const scope = parentScope(machine, (action) => actions.push(action));
-  const next = internalsOf(machine).transition(snapshot, event, scope);
-  return [next, actions];
+  return internalsOf(machine).transition(snapshot, event, parentScope(machine));
 }

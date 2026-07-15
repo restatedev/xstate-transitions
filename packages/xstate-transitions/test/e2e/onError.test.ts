@@ -22,7 +22,7 @@ import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 const machine = setup({
-  actors: {
+  actorSources: {
     boom: fromPromise(async () => {
       throw new Error("kaboom");
     }),
@@ -34,8 +34,8 @@ const machine = setup({
     run: {
       invoke: {
         src: "boom",
-        onDone: "ok",
-        onError: "failed",
+        onDone: { target: "ok" },
+        onError: { target: "failed" },
       },
     },
     ok: { type: "final" },

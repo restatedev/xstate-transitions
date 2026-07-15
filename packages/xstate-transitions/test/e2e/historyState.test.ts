@@ -27,14 +27,14 @@ const machine = createMachine({
   states: {
     main: {
       initial: "one",
-      on: { PAUSE: "paused" },
+      on: { PAUSE: { target: "paused" } },
       states: {
-        one: { on: { NEXT: "two" } },
+        one: { on: { NEXT: { target: "two" } } },
         two: {},
         hist: { type: "history", history: "shallow" },
       },
     },
-    paused: { on: { RESUME: "#hist.main.hist" } },
+    paused: { on: { RESUME: { target: "#hist.main.hist" } } },
   },
 });
 

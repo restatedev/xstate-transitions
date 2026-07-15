@@ -10,8 +10,11 @@
  */
 
 import * as restate from "@restatedev/restate-sdk";
-import { assign, fromPromise, setup } from "xstate";
-import { createMachineObject } from "@restatedev/xstate-transitions";
+import { setup, types } from "xstate";
+import {
+  createMachineObject,
+  fromPromise,
+} from "@restatedev/xstate-transitions";
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -22,7 +25,6 @@ async function delay(ms: number): Promise<void> {
 }
 
 interface PaymentReceivedEvent {
-  type: "PaymentReceivedEvent";
   accountId: string;
   payment: {
     amount: number;
@@ -36,9 +38,11 @@ interface PaymentReceivedEvent {
 }
 
 export const workflow = setup({
-  types: {
-    events: {} as PaymentReceivedEvent,
-    context: {} as {
+  schemas: {
+    events: {
+      PaymentReceivedEvent: types<PaymentReceivedEvent>(),
+    },
+    context: types<{
       payment: {
         amount: number;
       } | null;
@@ -49,10 +53,10 @@ export const workflow = setup({
         available: boolean;
       } | null;
       accountId: string | null;
-    },
+    }>(),
   },
 
-  actors: {
+  actorSources: {
     checkfunds: fromPromise(
       async ({
         input,
@@ -72,19 +76,20 @@ export const workflow = setup({
         };
       },
     ),
-    sendSuccessEmail: fromPromise(async ({ input }) => {
-      console.log({ input });
-      console.log("Running sendSuccessEmail");
-      console.log("sendSuccessEmail done");
-    }),
-    sendInsufficientFundsEmail: fromPromise(async ({ input }) => {
-      console.log({ input });
-      console.log("Running sendInsufficientFundsEmail");
-      console.log("sendInsufficientFundsEmail done");
-    }),
-  },
-  guards: {
-    fundsAvailable: ({ context }) => !!context.funds?.available,
+    sendSuccessEmail: fromPromise(
+      async ({ input }: { input: { applicant: { name: string } | null } }) => {
+        console.log({ input });
+        console.log("Running sendSuccessEmail");
+        console.log("sendSuccessEmail done");
+      },
+    ),
+    sendInsufficientFundsEmail: fromPromise(
+      async ({ input }: { input: { applicant: { name: string } | null } }) => {
+        console.log({ input });
+        console.log("Running sendInsufficientFundsEmail");
+        console.log("sendInsufficientFundsEmail done");
+      },
+    ),
   },
 }).createMachine({
   id: "paymentconfirmation",
@@ -98,15 +103,15 @@ export const workflow = setup({
   states: {
     Pending: {
       on: {
-        PaymentReceivedEvent: {
-          actions: assign({
-            accountId: ({ event }) => event.accountId,
-            customer: ({ event }) => event.customer,
-            payment: ({ event }) => event.payment,
-            funds: ({ event }) => event.funds,
-          }),
+        PaymentReceivedEvent: ({ event }) => ({
           target: "PaymentReceived",
-        },
+          context: {
+            accountId: event.accountId,
+            customer: event.customer,
+            payment: event.payment,
+            funds: event.funds,
+          },
+        }),
       },
     },
     PaymentReceived: {
@@ -117,23 +122,16 @@ export const workflow = setup({
           paymentamount: Number(context.payment?.amount),
         }),
         onDone: {
-          actions: assign({
-            funds: ({ event }) => event.output,
-          }),
           target: "ConfirmBasedOnFunds",
+          context: ({ output }) => ({ funds: output }),
         },
       },
     },
     ConfirmBasedOnFunds: {
-      always: [
-        {
-          guard: "fundsAvailable",
-          target: "SendPaymentSuccess",
-        },
-        {
-          target: "SendInsufficientResults",
-        },
-      ],
+      always: ({ context }) =>
+        context.funds?.available
+          ? { target: "SendPaymentSuccess" }
+          : { target: "SendInsufficientResults" },
     },
     SendPaymentSuccess: {
       invoke: {

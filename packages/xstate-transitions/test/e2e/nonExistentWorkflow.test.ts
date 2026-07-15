@@ -30,7 +30,7 @@ const simpleMachine = createMachine({
   id: "simplev1",
   initial: "idle",
   states: {
-    idle: { on: { START: "running" } },
+    idle: { on: { START: { target: "running" } } },
     running: {},
   },
 });

@@ -9,12 +9,7 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import type {
-  AnyStateMachine,
-  DoneActorEvent,
-  ErrorActorEvent,
-  InvokeConfig,
-} from "xstate";
+import type { AnyStateMachine, DoneActorEvent, ErrorActorEvent } from "xstate";
 
 /** Plain error data safe to persist and send between Restate handlers. */
 export interface NormalizedError {
@@ -33,7 +28,7 @@ export function resolveReferencedActor(
 ): unknown {
   const match = src.match(/^xstate\.invoke\.(\d+)\.(.*)/);
   if (!match) {
-    return machine.implementations.actors[src];
+    return machine.implementations.actorSources[src];
   }
   const indexStr = match[1];
   const nodeId = match[2];
@@ -41,20 +36,12 @@ export function resolveReferencedActor(
   const node = machine.getStateNodeById(nodeId);
   const invokeConfig = node.config.invoke;
   if (invokeConfig === undefined) return undefined;
-  return (
-    Array.isArray(invokeConfig)
-      ? invokeConfig[Number(indexStr)]
-      : (invokeConfig as InvokeConfig<
-          never,
-          never,
-          never,
-          never,
-          never,
-          never,
-          never,
-          never
-        >)
-  ).src;
+  // We only need the `src` off the invoke config; a minimal shape avoids
+  // coupling to xstate's generic InvokeConfig arity.
+  const entry = Array.isArray(invokeConfig)
+    ? invokeConfig[Number(indexStr)]
+    : invokeConfig;
+  return (entry as { src?: unknown } | undefined)?.src;
 }
 
 export function createDoneActorEvent(

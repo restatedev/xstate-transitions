@@ -23,8 +23,8 @@ const lifeCycleTrackerMachine = createMachine({
   id: "task",
   initial: "idle",
   states: {
-    idle: { on: { START: "inProgress" } },
-    inProgress: { on: { COMPLETE: "done" } },
+    idle: { on: { START: { target: "inProgress" } } },
+    inProgress: { on: { COMPLETE: { target: "done" } } },
     done: { type: "final" },
   },
 });

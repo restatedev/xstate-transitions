@@ -17,7 +17,7 @@ import { describeE2E } from "./harness";
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#parallel-execution-example
 export const workflow = setup({
-  actors: {
+  actorSources: {
     shortDelay: fromPromise(async () => {
       await new Promise<void>((resolve) =>
         setTimeout(() => {
@@ -48,7 +48,7 @@ export const workflow = setup({
             active: {
               invoke: {
                 src: "shortDelay",
-                onDone: "done",
+                onDone: { target: "done" },
               },
             },
             done: {
@@ -62,7 +62,7 @@ export const workflow = setup({
             active: {
               invoke: {
                 src: "longDelay",
-                onDone: "done",
+                onDone: { target: "done" },
               },
             },
             done: {
@@ -71,7 +71,7 @@ export const workflow = setup({
           },
         },
       },
-      onDone: "Success",
+      onDone: { target: "Success" },
     },
     Success: {
       type: "final",

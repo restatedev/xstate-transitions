@@ -11,13 +11,11 @@
 
 import { it } from "vitest";
 import {
-  assign,
+  createAsyncLogic,
   createMachine,
-  forwardTo,
-  fromPromise,
   type SnapshotFrom,
-  sendParent,
   setup,
+  types,
 } from "xstate";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -52,9 +50,8 @@ interface ConfirmationCompletedEvent {
 }
 
 export const workflow = setup({
-  types: {
-    events: {} as PaymentReceivedEvent,
-    context: {} as {
+  schemas: {
+    context: types<{
       payment: {
         amount: number;
       } | null;
@@ -65,12 +62,15 @@ export const workflow = setup({
         available: boolean;
       } | null;
       accountId: string | null;
+    }>(),
+    events: {
+      PaymentReceivedEvent: types<Omit<PaymentReceivedEvent, "type">>(),
     },
   },
 
-  actors: {
-    checkfunds: fromPromise(
-      async ({
+  actorSources: {
+    checkfunds: createAsyncLogic({
+      run: async ({
         input,
       }: {
         input: {
@@ -87,20 +87,29 @@ export const workflow = setup({
           available: input.paymentamount < 1000,
         };
       },
-    ),
-    sendSuccessEmail: fromPromise(async ({ input }) => {
-      console.log({ input });
-      console.log("Running sendSuccessEmail");
-      console.log("sendSuccessEmail done");
     }),
-    sendInsufficientFundsEmail: fromPromise(async ({ input }) => {
-      console.log({ input });
-      console.log("Running sendInsufficientFundsEmail");
-      console.log("sendInsufficientFundsEmail done");
+    sendSuccessEmail: createAsyncLogic({
+      run: async ({
+        input,
+      }: {
+        input: { applicant: { name: string } | null };
+      }) => {
+        console.log({ input });
+        console.log("Running sendSuccessEmail");
+        console.log("sendSuccessEmail done");
+      },
     }),
-  },
-  guards: {
-    fundsAvailable: ({ context }) => !!context.funds?.available,
+    sendInsufficientFundsEmail: createAsyncLogic({
+      run: async ({
+        input,
+      }: {
+        input: { applicant: { name: string } | null };
+      }) => {
+        console.log({ input });
+        console.log("Running sendInsufficientFundsEmail");
+        console.log("sendInsufficientFundsEmail done");
+      },
+    }),
   },
 }).createMachine({
   id: "paymentconfirmation",
@@ -115,11 +124,11 @@ export const workflow = setup({
     Pending: {
       on: {
         PaymentReceivedEvent: {
-          actions: assign({
-            accountId: ({ event }) => event.accountId,
-            customer: ({ event }) => event.customer,
-            payment: ({ event }) => event.payment,
-            funds: ({ event }) => event.funds,
+          context: ({ event }) => ({
+            accountId: event.accountId,
+            customer: event.customer,
+            payment: event.payment,
+            funds: event.funds,
           }),
           target: "PaymentReceived",
         },
@@ -133,23 +142,19 @@ export const workflow = setup({
           paymentamount: Number(context.payment?.amount),
         }),
         onDone: {
-          actions: assign({
-            funds: ({ event }) => event.output,
+          context: ({ output }) => ({
+            funds: output,
           }),
           target: "ConfirmBasedOnFunds",
         },
       },
     },
     ConfirmBasedOnFunds: {
-      always: [
-        {
-          guard: "fundsAvailable",
-          target: "SendPaymentSuccess",
-        },
-        {
-          target: "SendInsufficientResults",
-        },
-      ],
+      // inlined guard: fundsAvailable === !!context.funds?.available
+      always: ({ context }) =>
+        context.funds?.available
+          ? { target: "SendPaymentSuccess" }
+          : { target: "SendInsufficientResults" },
     },
     SendPaymentSuccess: {
       invoke: {
@@ -175,33 +180,40 @@ export const workflow = setup({
     },
     End: {
       type: "final",
-      entry: sendParent(
-        () =>
-          ({
-            type: "ConfirmationCompletedEvent",
-            payment: { amount: 1337 },
-          }) satisfies ConfirmationCompletedEvent,
-      ),
+      entry: ({ parent }, enq) => {
+        enq.sendTo(parent, {
+          type: "ConfirmationCompletedEvent",
+          payment: { amount: 1337 },
+        } satisfies ConfirmationCompletedEvent);
+      },
     },
   },
 });
 
 const parentWorkflow = createMachine({
   id: "parent",
-  types: {} as {
-    events: PaymentReceivedEvent | ConfirmationCompletedEvent;
+  schemas: {
+    context: types<{ payment: { amount: number } | null }>(),
+    events: {
+      PaymentReceivedEvent: types<Omit<PaymentReceivedEvent, "type">>(),
+      ConfirmationCompletedEvent:
+        types<Omit<ConfirmationCompletedEvent, "type">>(),
+    },
   },
+  context: { payment: null },
   invoke: {
     id: "paymentconfirmation",
     src: workflow,
   },
   on: {
-    PaymentReceivedEvent: { actions: forwardTo("paymentconfirmation") },
-    ConfirmationCompletedEvent: {
-      actions: assign({
-        payment: ({ event }) => event.payment,
-      }),
+    PaymentReceivedEvent: ({ children, event }, enq) => {
+      enq.sendTo(children.paymentconfirmation, event);
     },
+    ConfirmationCompletedEvent: ({ event }) => ({
+      context: {
+        payment: event.payment,
+      },
+    }),
   },
 });
 

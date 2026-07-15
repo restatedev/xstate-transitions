@@ -16,7 +16,7 @@
  */
 
 import { expect, it } from "vitest";
-import { cancel, createMachine, raise } from "xstate";
+import { createMachine } from "xstate";
 import { eventually, wait } from "./eventually.js";
 import { describeE2E } from "./harness";
 
@@ -26,16 +26,19 @@ const machine = createMachine({
   states: {
     idle: {
       on: {
-        START_DELAYED: {
-          target: "pending",
-          actions: raise({ type: "FIRE" }, { delay: 1500, id: "d" }),
+        START_DELAYED: (_, enq) => {
+          enq.raise({ type: "FIRE" }, { delay: 1500, id: "d" });
+          return { target: "pending" };
         },
       },
     },
     pending: {
       on: {
-        CANCEL: { target: "idle", actions: cancel("d") },
-        FIRE: "fired",
+        CANCEL: (_, enq) => {
+          enq.cancel("d");
+          return { target: "idle" };
+        },
+        FIRE: { target: "fired" },
       },
     },
     fired: { type: "final" },

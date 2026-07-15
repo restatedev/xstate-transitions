@@ -22,7 +22,6 @@
 import { describe, expect, it } from "vitest";
 import {
   type AnyMachineSnapshot,
-  assign,
   createMachine,
   initialTransition,
   transition,
@@ -37,17 +36,14 @@ function roundTrip<T>(snapshot: T): T {
 describe("Snapshot round-trip (stateless rehydration contract)", () => {
   it("preserves value, context and status across JSON + resolveState", () => {
     const counter = createMachine({
-      types: {} as { context: { count: number } },
       id: "counter",
       context: { count: 0 },
       initial: "idle",
       states: {
         idle: {
           on: {
-            inc: {
-              actions: assign({ count: ({ context }) => context.count + 1 }),
-            },
-            finish: "done",
+            inc: ({ context }) => ({ context: { count: context.count + 1 } }),
+            finish: { target: "done" },
           },
         },
         done: { type: "final" },
@@ -80,15 +76,15 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
       states: {
         main: {
           initial: "one",
-          on: { PAUSE: "paused" },
+          on: { PAUSE: { target: "paused" } },
           states: {
-            one: { on: { NEXT: "two" } },
+            one: { on: { NEXT: { target: "two" } } },
             two: {},
             hist: { type: "history", history: "shallow" },
           },
         },
         paused: {
-          on: { RESUME: "#hist.main.hist" },
+          on: { RESUME: { target: "#hist.main.hist" } },
         },
       },
     });
@@ -102,12 +98,14 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
     expect((s as AnyMachineSnapshot).value).toEqual({ main: "two" });
   });
 
-  it("a NAIVE raw JSON round-trip loses history (motivates toStored/fromStored)", () => {
-    // Root cause: the raw snapshot's `historyValue` holds live StateNode
-    // instances; JSON.stringify turns them into plain objects, so `transition`
-    // can no longer resolve the history target and falls back to the initial
-    // sub-state. This is exactly why the integration does not round-trip the raw
-    // snapshot; the next test shows the history-safe helpers it uses instead.
+  it("a NAIVE raw JSON round-trip is unusable for history (motivates toStored/fromStored)", () => {
+    // Root cause: once a history state records a value, the raw snapshot's
+    // `historyValue` holds live StateNode instances whose `parent` links form a
+    // cycle, so a naive JSON.stringify of the raw snapshot throws. (In XState v5
+    // it silently degraded to the initial sub-state; v6 fails loudly.) Either
+    // way the raw snapshot cannot be persisted directly — which is exactly why
+    // the integration serializes via toStored/fromStored (node ids) instead, as
+    // the next test shows.
     const machine = historyMachine();
     const step = (snap: unknown, event: { type: string }) =>
       transition(
@@ -119,10 +117,9 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
     let [snapshot] = initialTransition(machine);
     snapshot = step(snapshot, { type: "NEXT" }); // main.two
     snapshot = step(snapshot, { type: "PAUSE" }); // records history at main.two
-    snapshot = step(snapshot, { type: "RESUME" });
 
-    // Documents the CURRENT (buggy) behaviour: history is not restored.
-    expect((snapshot as AnyMachineSnapshot).value).toEqual({ main: "one" });
+    // The next naive round-trip fails on the circular recorded historyValue.
+    expect(() => step(snapshot, { type: "RESUME" })).toThrow(/circular/i);
   });
 
   it("history state survives the history-safe persistence helpers", () => {
@@ -139,8 +136,8 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
         event as never,
       )[0] as AnyMachineSnapshot;
 
-    let [snapshot] = initialTransition(machine);
-    let stored = persist(snapshot as AnyMachineSnapshot);
+    let snapshot: AnyMachineSnapshot = initialTransition(machine)[0];
+    let stored = persist(snapshot);
     for (const type of ["NEXT", "PAUSE", "RESUME"]) {
       snapshot = step(stored, { type });
       stored = persist(snapshot);

@@ -9,6 +9,13 @@ This largely follows this structure:
 
 https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570
 
+> [!NOTE]
+> This integration targets **XState v6** (currently `6.0.0-alpha.21`). Because it
+> depends on XState's pure-transition internals, the version is pinned exactly;
+> XState v6 is still in alpha, so treat an upgrade as an integration change.
+> Machines use the v6 authoring model (inline `(args, enq) => …` transitions,
+> `schemas`, `enq.sendTo`/`enq.raise`), not the v5 action creators.
+
 For setup, modeling guidance, supported behavior, testing strategy, and a tour
 of the implementation, see the **[XState + Restate Integration Manual](MANUAL.md)**.
 
@@ -67,8 +74,8 @@ supports:
   event carried by `waitFor`.
 - **`finalStateTTL`** disposal of completed instances.
 - **Cross-machine messaging**: `invoke` / `spawn` of a child machine runs it as
-  its own virtual object (keyed `${parent}::${childId}`), with `sendTo` /
-  `forwardTo` / `sendParent` routed as Restate sends between objects, and invoke
+  its own virtual object (keyed `${parent}::${childId}`), with `enq.sendTo` to a
+  child or to the parent routed as Restate sends between objects, and invoke
   `onDone` / `onError` reported back to the parent.
 - **Private actor protocols**: actor completion and failure use distinct
   ingress-private handlers with execution-generation tokens, so callers cannot
@@ -77,8 +84,8 @@ supports:
 
 ### Current limitation
 
-`fromCallback` push actors (e.g. a `setInterval` that `sendBack`s events) are not
-supported — they require a long-lived in-process actor, which the
+`createCallbackLogic` push actors (e.g. a `setInterval` that `sendBack`s events)
+are not supported — they require a long-lived in-process actor, which the
 stateless-between-requests model deliberately avoids. Model such cases by sending
 events into the machine externally, or with a recurring delayed self-event. See
 the skipped [stopwatchMachine.test.ts](test/e2e/stopwatchMachine.test.ts).

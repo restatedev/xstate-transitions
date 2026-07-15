@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { assign, type SnapshotFrom, setup } from "xstate";
+import { type SnapshotFrom, setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -26,18 +26,18 @@ interface Customer {
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#perform-customer-credit-check-example
 export const workflow = setup({
-  types: {
-    context: {} as {
+  schemas: {
+    context: types<{
       customer: Customer;
       creditCheck: {
         decision: "Approved" | "Denied";
       } | null;
-    },
-    input: {} as {
+    }>(),
+    input: types<{
       customer: Customer;
-    },
+    }>(),
   },
-  actors: {
+  actorSources: {
     callCreditCheckMicroservice: fromPromise(
       ({ input }: { input: { customer: Customer } }) => {
         console.log("calling credit check microservice", input);
@@ -76,9 +76,6 @@ export const workflow = setup({
       },
     ),
   },
-  delays: {
-    PT15M: 15 * 60 * 1000,
-  },
 }).createMachine({
   id: "customercreditcheck",
   initial: "CheckCredit",
@@ -95,30 +92,23 @@ export const workflow = setup({
         }),
         onDone: {
           target: "EvaluateDecision",
-          actions: assign({
-            creditCheck: ({ event }) => event.output,
+          context: ({ output }) => ({
+            creditCheck: output,
           }),
         },
       },
-      // timeout
+      // timeout — PT15M (15 minutes) in the spec.
       after: {
-        PT15M: "Timeout",
+        900_000: { target: "Timeout" },
       },
     },
     EvaluateDecision: {
-      always: [
-        {
-          guard: ({ context }) => context.creditCheck?.decision === "Approved",
-          target: "StartApplication",
-        },
-        {
-          guard: ({ context }) => context.creditCheck?.decision === "Denied",
-          target: "RejectApplication",
-        },
-        {
-          target: "RejectApplication",
-        },
-      ],
+      always: ({ context }) =>
+        context.creditCheck?.decision === "Approved"
+          ? { target: "StartApplication" }
+          : context.creditCheck?.decision === "Denied"
+            ? { target: "RejectApplication" }
+            : { target: "RejectApplication" },
     },
     StartApplication: {
       invoke: {

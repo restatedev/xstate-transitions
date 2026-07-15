@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { assign, type SnapshotFrom, setup } from "xstate";
+import { type SnapshotFrom, setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -31,7 +31,7 @@ interface PatientInfo {
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#event-based-service-invocation
 export const workflow = setup({
-  actors: {
+  actorSources: {
     MakeAppointmentAction: fromPromise(
       async ({ input }: { input: { patientInfo: PatientInfo } }) => {
         console.log("Making vet appointment for", input.patientInfo);
@@ -51,41 +51,29 @@ export const workflow = setup({
   },
 }).createMachine({
   id: "VetAppointmentWorkflow",
-  types: {} as {
-    context: {
-      patientInfo: PatientInfo | null;
-      appointmentInfo: {
-        appointmentId: string;
-        appointmentDate: string;
-      } | null;
-    };
+  schemas: {
     events: {
-      type: "MakeVetAppointment";
-      patientInfo: {
-        name: string;
-        pet: string;
-        reason: string;
-      };
-    };
+      MakeVetAppointment: types<{
+        patientInfo: {
+          name: string;
+          pet: string;
+          reason: string;
+        };
+      }>(),
+    },
   },
   initial: "Idle",
   context: {
     patientInfo: null,
     appointmentInfo: null,
-  } as {
-    patientInfo: PatientInfo | null;
-    appointmentInfo: {
-      appointmentId: string;
-      appointmentDate: string;
-    } | null;
   },
   states: {
     Idle: {
       on: {
         MakeVetAppointment: {
           target: "MakeVetAppointmentState",
-          actions: assign({
-            patientInfo: ({ event }) => event.patientInfo,
+          context: ({ event }) => ({
+            patientInfo: event.patientInfo,
           }),
         },
       },
@@ -98,8 +86,8 @@ export const workflow = setup({
         }),
         onDone: {
           target: "Idle",
-          actions: assign({
-            appointmentInfo: ({ event }) => event.output,
+          context: ({ output }) => ({
+            appointmentInfo: output,
           }),
         },
       },

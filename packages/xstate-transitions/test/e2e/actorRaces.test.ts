@@ -16,7 +16,7 @@
  */
 
 import { expect, it, vi } from "vitest";
-import { assign, setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { wait } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -42,8 +42,8 @@ describeE2E("Actor completion races", (createActor) => {
     async () => {
       const pending: PendingRun[] = [];
       const machine = setup({
-        types: { context: {} as { winner?: string } },
-        actors: { work: deferredWork(pending) },
+        schemas: { context: types<{ winner?: string }>() },
+        actorSources: { work: deferredWork(pending) },
       }).createMachine({
         id: "actor-winner-loser",
         context: {},
@@ -57,7 +57,7 @@ describeE2E("Actor completion races", (createActor) => {
                 input: { id: "a" },
                 onDone: {
                   target: "done",
-                  actions: assign({ winner: ({ event }) => event.output }),
+                  context: ({ output }) => ({ winner: output }),
                 },
               },
               {
@@ -66,7 +66,7 @@ describeE2E("Actor completion races", (createActor) => {
                 input: { id: "b" },
                 onDone: {
                   target: "done",
-                  actions: assign({ winner: ({ event }) => event.output }),
+                  context: ({ output }) => ({ winner: output }),
                 },
               },
             ],
@@ -111,11 +111,11 @@ describeE2E("Actor completion races", (createActor) => {
     async () => {
       const pending: PendingRun[] = [];
       const machine = setup({
-        types: {
-          input: {} as { generation: number },
-          context: {} as { generation: number; result?: string },
+        schemas: {
+          input: types<{ generation: number }>(),
+          context: types<{ generation: number; result?: string }>(),
         },
-        actors: { work: deferredWork(pending) },
+        actorSources: { work: deferredWork(pending) },
       }).createMachine({
         id: "actor-recreate-race",
         context: ({ input }) => ({ generation: input.generation }),
@@ -128,7 +128,7 @@ describeE2E("Actor completion races", (createActor) => {
               input: ({ context }) => ({ id: String(context.generation) }),
               onDone: {
                 target: "done",
-                actions: assign({ result: ({ event }) => event.output }),
+                context: ({ output }) => ({ result: output }),
               },
             },
           },

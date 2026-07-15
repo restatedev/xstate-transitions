@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AnyMachineSnapshot } from "xstate";
-import { assign, createMachine, initialTransition, transition } from "xstate";
+import { createMachine, initialTransition, transition } from "xstate";
 import {
   fromStored,
   toReturnedSnapshot,
@@ -22,13 +22,12 @@ const jsonRoundTrip = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 describe("toStored / fromStored", () => {
   const counter = createMachine({
-    types: {} as { context: { n: number } },
     id: "counter",
     context: { n: 0 },
     initial: "idle",
     states: {
       idle: {
-        on: { inc: { actions: assign({ n: ({ context }) => context.n + 1 }) } },
+        on: { inc: ({ context }) => ({ context: { n: context.n + 1 } }) },
       },
     },
   });

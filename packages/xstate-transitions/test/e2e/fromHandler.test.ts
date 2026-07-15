@@ -20,18 +20,18 @@
 
 import { TerminalError } from "@restatedev/restate-sdk";
 import { expect, it, vi } from "vitest";
-import { setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromHandler } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
   setup({
-    types: {
-      input: {} as { customer: string },
-      context: {} as { customer: string },
+    schemas: {
+      input: types<{ customer: string }>(),
+      context: types<{ customer: string }>(),
     },
-    actors: {
+    actorSources: {
       sendEmail: fromHandler<undefined, { customer: string }>(
         async ({ input, ctx }) => {
           await ctx.run("Sending email to", async () => {
@@ -49,8 +49,8 @@ const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
         invoke: {
           src: "sendEmail",
           input: ({ context }) => ({ customer: context.customer }),
-          onDone: "Email sent",
-          onError: "Failed",
+          onDone: { target: "Email sent" },
+          onError: { target: "Failed" },
         },
       },
       "Email sent": { type: "final" },

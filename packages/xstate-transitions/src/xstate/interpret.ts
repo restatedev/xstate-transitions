@@ -13,7 +13,10 @@ import type {
   AnyEventObject,
   AnyMachineSnapshot,
   AnyStateMachine,
+  SpawnExecutableActionObject,
 } from "xstate";
+import { isBuiltInExecutableAction } from "xstate";
+import { resolveReferencedActor } from "./actors";
 import { isMachine } from "./registry";
 import { PARENT_ID, runInitial, runTransition, stubChildRef } from "./scope";
 import { fromStored, toReturnedSnapshot, toStored } from "./snapshot";
@@ -22,7 +25,6 @@ import type {
   Effect,
   InitInput,
   ResumeInput,
-  SpawnParams,
   Step,
   Target,
 } from "./types";
@@ -33,6 +35,14 @@ import type {
 // persisted state, and an event. There is NO Restate dependency here; it is
 // fully unit-testable with plain objects. The Restate layer executes the
 // effects (see ../restate/effects.ts).
+//
+// XState v6 returns a `[snapshot, actions]` tuple from its pure transition API,
+// where each action is an `ExecutableActionObject`. We inspect the built-in
+// members (`@xstate.spawn`, `@xstate.sendTo`, `@xstate.raise`, `@xstate.cancel`,
+// `@xstate.stop`) via `isBuiltInExecutableAction` and read their stable named
+// fields. The `@xstate.start` action (a deferred "start this ref") is ignored:
+// we run actors out-of-band through Restate rather than through XState's actor
+// lifecycle.
 // ---------------------------------------------------------------------------
 
 // ===========================================================================
@@ -49,7 +59,8 @@ import type {
  *
  * @param machine - The state machine to start.
  * @param input - The machine input, and whether this instance is a child
- *   (a child uses a parent-aware scope so entry `sendParent` actions resolve).
+ *   (a child uses a parent-aware scope so entry `sendTo(parent, …)` actions
+ *   resolve).
  * @returns The next persisted state, a caller-facing snapshot, and the effects.
  */
 export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
@@ -96,29 +107,8 @@ export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
 // Internals
 // ===========================================================================
 
-// The executable actions xstate emits carry loosely-typed params. These local
-// views describe the fields we read, narrowed once per case rather than inline.
-interface RaiseParams {
-  event: AnyEventObject;
-  id?: string;
-  delay?: number;
-}
-interface SendToParams extends RaiseParams {
-  to?: unknown;
-  targetId?: string;
-}
-interface CancelParams {
-  sendId: string;
-}
-/** A child entry as it appears on a snapshot's `children` map. */
-interface ChildRef {
-  id?: string;
-  logic?: unknown;
-  src?: unknown;
-  options?: { input?: unknown };
-}
-/** A `sendTo` target given as an actor ref rather than a string id. */
-interface RefLike {
+/** The subset of an actor ref we read for routing (target/stop resolution). */
+interface ActorLike {
   id?: string;
   logic?: unknown;
 }
@@ -165,130 +155,122 @@ function interpretActions(
 ): Effect[] {
   const activeChildren = new Set(knownChildIds);
   const activePromises = new Set(knownPromiseIds);
-  const effects = stopActorEffects(actions, activeChildren, activePromises);
-  effects.push(
-    ...startActorEffects(snapshot, actions, activeChildren, activePromises),
-  );
-  for (const action of actions) {
-    const effect = toEffect(machine, action, activeChildren, activePromises);
-    if (effect) effects.push(effect);
-  }
-  return effects;
-}
-
-/** Stop persisted actors before considering starts in the next snapshot. */
-function stopActorEffects(
-  actions: Action[],
-  activeChildren: Set<string>,
-  activePromises: Set<string>,
-): Effect[] {
   const effects: Effect[] = [];
+
+  // Actors (re)started this step. XState v6 emits `@xstate.spawn` for every
+  // invoke/spawn (it carries the id, resolved input, and `src`/`logic`).
+  const spawned = new Map<string, SpawnExecutableActionObject>();
   for (const action of actions) {
-    if (action.type !== "xstate.stopChild") continue;
-    const childId = refId(action.params);
-    if (childId === undefined) continue;
-    if (activeChildren.delete(childId)) {
+    if (isBuiltInExecutableAction(action) && action.type === "@xstate.spawn") {
+      spawned.set(action.id, action);
+    }
+  }
+
+  // 1. Stop persisted actors. Unlike v5, v6 does not emit a stop action when an
+  //    invoke's state is exited — the actor simply disappears from the
+  //    post-transition `snapshot.children`. A reentered actor stays in children
+  //    but is re-spawned this step, so a fresh spawn also implies stopping the
+  //    prior incarnation. Stopping here removes it from the active sets; step 2
+  //    re-adds a reentered actor as a start, yielding stop-then-start.
+  const liveChildren = childIdsOf(snapshot);
+  for (const childId of knownChildIds) {
+    if (
+      (!liveChildren.has(childId) || spawned.has(childId)) &&
+      activeChildren.delete(childId)
+    ) {
       effects.push({ kind: "stopChild", childId });
-    } else if (activePromises.delete(childId)) {
-      effects.push({ kind: "stopPromise", actorId: childId });
     }
   }
-  return effects;
-}
-
-/** Collect newly spawned actors, including assign-spawn (which emits no action). */
-function startActorEffects(
-  snapshot: AnyMachineSnapshot,
-  actions: Action[],
-  activeChildren: Set<string>,
-  activePromises: Set<string>,
-): Effect[] {
-  const spawnParams = new Map<string, SpawnParams>();
-  for (const action of actions) {
-    if (action.type === "xstate.spawnChild") {
-      const params = action.params as SpawnParams;
-      spawnParams.set(params.id, params);
+  for (const actorId of knownPromiseIds) {
+    if (
+      (!liveChildren.has(actorId) || spawned.has(actorId)) &&
+      activePromises.delete(actorId)
+    ) {
+      effects.push({ kind: "stopPromise", actorId });
     }
   }
 
-  const effects: Effect[] = [];
-  for (const [childId, value] of Object.entries(snapshot.children)) {
-    const ref = value as ChildRef | undefined;
-    const logic = ref?.logic;
-    const params = spawnParams.get(childId);
-    const input = params ? params.input : ref?.options?.input;
+  // 2. Start newly spawned/invoked actors. The `src`/`logic` tell a child
+  //    machine (its own virtual object) from a promise/handler actor (run
+  //    out-of-band).
+  for (const [id, action] of spawned) {
+    if (activeChildren.has(id) || activePromises.has(id)) continue;
 
-    if (isMachine(logic)) {
-      if (!activeChildren.has(childId)) {
-        effects.push({
-          kind: "startChild",
-          childId,
-          machineId: logic.id,
-          input,
-        });
-      }
-      activeChildren.add(childId);
-      continue;
-    }
-
-    // XState does not emit xstate.spawnChild when spawn() is used inside
-    // assign(). Reconstruct the request from the live ref before it is removed
-    // by snapshot serialization.
-    if (!params && ref && (ref.src !== undefined || logic !== undefined)) {
+    const childMachine = resolveChildMachine(machine, action.src, action.logic);
+    if (childMachine !== undefined) {
+      effects.push({
+        kind: "startChild",
+        childId: id,
+        machineId: childMachine.id,
+        input: action.input,
+      });
+      activeChildren.add(id);
+    } else {
       effects.push({
         kind: "runPromise",
-        params: {
-          id: childId,
-          src: ref.src ?? logic,
-          input,
-        },
+        params: { id, src: action.src ?? action.logic, input: action.input },
       });
-      activePromises.add(childId);
+      activePromises.add(id);
     }
   }
+
+  // 3. Sends, delayed sends, and cancellations.
+  for (const action of actions) {
+    const effect = toEffect(machine, action, activeChildren);
+    if (effect) effects.push(effect);
+  }
+
   return effects;
 }
 
-/** Translate one executable action into an Effect (or none). */
+/** The ids of actors still active in a snapshot's `children` map. */
+function childIdsOf(snapshot: AnyMachineSnapshot): ReadonlySet<string> {
+  return new Set(Object.keys(snapshot.children ?? {}));
+}
+
+/**
+ * Resolve a spawn/invoke `src` to a child machine, or `undefined` when it is a
+ * promise/handler actor (which the Restate layer runs out-of-band).
+ */
+function resolveChildMachine(
+  machine: AnyStateMachine,
+  src: string | unknown,
+  logic: unknown,
+): AnyStateMachine | undefined {
+  const candidate =
+    typeof src === "string"
+      ? resolveReferencedActor(machine, src)
+      : (src ?? logic);
+  return isMachine(candidate) ? candidate : undefined;
+}
+
+/** Translate one send/raise/cancel action into an Effect (or none). */
 function toEffect(
   machine: AnyStateMachine,
   action: Action,
-  activeChildren: Set<string>,
-  activePromises: Set<string>,
+  activeChildren: ReadonlySet<string>,
 ): Effect | undefined {
+  if (!isBuiltInExecutableAction(action)) return undefined;
   switch (action.type) {
-    case "xstate.spawnChild": {
-      const params = action.params as SpawnParams;
-      // machine children are started separately; only promise/plain actors here
-      if (activeChildren.has(params.id) || activePromises.has(params.id)) {
-        return undefined;
-      }
-      activePromises.add(params.id);
-      return { kind: "runPromise", params };
-    }
-    case "xstate.raise": {
-      const { event, id, delay } = action.params as RaiseParams;
+    case "@xstate.raise": {
       // A raise without a delay is drained inside the macrostep. An explicit
-      // delay of zero is still scheduled by XState and must not be dropped.
-      return delay !== undefined
-        ? scheduleSend(id, { type: "self" }, event, delay)
+      // delay (including zero) is scheduled by XState and must not be dropped.
+      // A raise always targets self.
+      return action.delay !== undefined
+        ? scheduleSend(action.id, { type: "self" }, action.event, action.delay)
         : undefined;
     }
-    case "xstate.sendTo": {
-      const params = action.params as SendToParams;
-      const target = targetOf(machine, params, activeChildren);
+    case "@xstate.sendTo": {
+      const target = targetOf(machine, action.target, activeChildren);
       if (!target) return undefined;
-      return params.delay !== undefined
-        ? scheduleSend(params.id, target, params.event, params.delay)
-        : { kind: "send", target, event: params.event };
+      return action.delay !== undefined
+        ? scheduleSend(action.id, target, action.event, action.delay)
+        : { kind: "send", target, event: action.event as AnyEventObject };
     }
-    case "xstate.cancel": {
-      const { sendId } = action.params as CancelParams;
-      return { kind: "cancel", sendId };
-    }
-    case "xstate.stopChild":
-      return undefined;
+    case "@xstate.cancel":
+      return { kind: "cancel", sendId: action.id };
     default:
+      // @xstate.spawn / @xstate.start / @xstate.stop are handled elsewhere.
       return undefined;
   }
 }
@@ -308,32 +290,18 @@ function scheduleSend(
   };
 }
 
+/** Resolve a `@xstate.sendTo` target ref to a routing destination. */
 function targetOf(
   machine: AnyStateMachine,
-  params: SendToParams,
+  target: unknown,
   activeChildren: ReadonlySet<string>,
 ): Target | undefined {
-  const to = params.to;
-  if (params.targetId !== undefined) {
-    return params.targetId === PARENT_ID
-      ? { type: "parent" }
-      : { type: "child", childId: params.targetId };
+  const ref = target as ActorLike | undefined;
+  const id = ref?.id;
+  if (id === PARENT_ID) return { type: "parent" };
+  if (id !== undefined && activeChildren.has(id)) {
+    return { type: "child", childId: id };
   }
-  if (typeof to === "string") {
-    return to === PARENT_ID
-      ? { type: "parent" }
-      : { type: "child", childId: to };
-  }
-
-  const ref = to as RefLike | undefined;
-  if (ref?.id !== undefined && activeChildren.has(ref.id)) {
-    return { type: "child", childId: ref.id };
-  }
-  return ref?.logic === machine ? { type: "self" } : undefined;
-}
-
-function refId(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const ref = value as RefLike & { actorRef?: RefLike };
-  return typeof ref.id === "string" ? ref.id : ref.actorRef?.id;
+  if (ref?.logic === machine) return { type: "self" };
+  return undefined;
 }

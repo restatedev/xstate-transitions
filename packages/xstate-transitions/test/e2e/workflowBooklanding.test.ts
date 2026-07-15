@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { assign, createMachine } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -34,243 +34,238 @@ interface Lender {
 }
 
 // https://github.com/serverlessworkflow/specification/blob/main/examples/README.md#book-lending
-export const workflow = createMachine(
-  {
-    types: {} as {
-      context: {
+export const workflow = setup({
+  schemas: {
+    context: types<{
+      book: {
+        title: string;
+        id: string;
+        status: "onloan" | "available" | "unknown";
+      } | null;
+      lender: Lender | null;
+    }>(),
+    events: {
+      bookLendingRequest: types<{
         book: {
           title: string;
           id: string;
-          status: "onloan" | "available" | "unknown";
-        } | null;
-        lender: Lender | null;
-      };
-      events:
-        | {
-            type: "bookLendingRequest";
-            book: {
-              title: string;
-              id: string;
-            };
-            lender: Lender;
-          }
-        | {
-            type: "holdBook";
-          }
-        | {
-            type: "declineBookhold";
-          };
-    },
-    initial: "Book Lending Request",
-    context: {
-      book: null,
-      lender: null,
-    },
-    states: {
-      "Book Lending Request": {
-        on: {
-          bookLendingRequest: {
-            target: "Get Book Status",
-            actions: assign({
-              book: ({ event }) => ({
-                ...event.book,
-                status: "unknown" as const,
-              }),
-            }),
-          },
-        },
-      },
-      "Get Book Status": {
-        invoke: {
-          src: "Get status for book",
-          input: ({ context }) => ({
-            bookid: context.book?.id,
-          }),
-          onDone: {
-            target: "Book Status Decision",
-            actions: assign({
-              // TODO: Fix typing issue
-              book: ({ context, event }) => ({
-                ...context.book!,
-
-                status: event.output.status,
-              }),
-            }),
-          },
-        },
-      },
-      "Book Status Decision": {
-        always: [
-          {
-            guard: ({ context }) => context.book?.status === "onloan",
-            target: "Report Status To Lender",
-          },
-          {
-            guard: ({ context }) => context.book?.status === "available",
-            target: "Check Out Book",
-          },
-          {
-            target: "End",
-          },
-        ],
-      },
-      "Report Status To Lender": {
-        invoke: {
-          src: "Send status to lender",
-          input: ({ context }) => ({
-            bookid: context.book?.id,
-            message: `Book ${String(context.book?.title)} is already on loan`,
-          }),
-          onDone: {
-            target: "Wait for Lender response",
-          },
-        },
-      },
-      "Wait for Lender response": {
-        on: {
-          holdBook: {
-            target: "Request Hold",
-          },
-          declineBookhold: {
-            target: "Cancel Request",
-          },
-        },
-      },
-      "Request Hold": {
-        invoke: {
-          src: "Request hold for lender",
-          input: ({ context }) => ({
-            bookid: context.book?.id,
-            lender: context.lender,
-          }),
-          onDone: {
-            target: "Sleep two weeks",
-          },
-        },
-      },
-      "Cancel Request": {
-        invoke: {
-          src: "Cancel hold request for lender",
-          input: ({ context }) => ({
-            bookid: context.book?.id,
-            lender: context.lender,
-          }),
-          onDone: {
-            target: "End",
-          },
-        },
-      },
-      "Sleep two weeks": {
-        after: {
-          PT2W: {
-            target: "Get Book Status",
-          },
-        },
-      },
-      "Check Out Book": {
-        initial: "Checking out book",
-        states: {
-          "Checking out book": {
-            invoke: {
-              src: "Check out book with id",
-              input: ({ context }) => ({
-                bookid: context.book?.id,
-              }),
-              onDone: {
-                target: "Notifying Lender",
-              },
-            },
-          },
-          "Notifying Lender": {
-            invoke: {
-              src: "Notify Lender for checkout",
-              input: ({ context }) => ({
-                bookid: context.book?.id,
-                lender: context.lender,
-              }),
-              onDone: {
-                target: "End",
-              },
-            },
-          },
-          End: {
-            type: "final",
-          },
-        },
-      },
-      End: {
-        type: "final",
-      },
+        };
+        lender: Lender;
+      }>(),
+      holdBook: types<Record<string, never>>(),
+      declineBookhold: types<Record<string, never>>(),
     },
   },
-  {
-    actors: {
-      "Get status for book": fromPromise(async ({ input }) => {
+  actorSources: {
+    "Get status for book": fromPromise(
+      async ({ input }: { input: { bookid: string | undefined } }) => {
         console.log("Starting Get status for book", input);
         await delay(1000);
 
         return {
-          status: "available",
+          status: "available" as const,
         };
-      }),
-      "Send status to lender": fromPromise(async ({ input }) => {
+      },
+    ),
+    "Send status to lender": fromPromise(
+      async ({
+        input,
+      }: {
+        input: { bookid: string | undefined; message: string };
+      }) => {
         console.log("Starting Send status to lender", input);
         await delay(1000);
-      }),
-      "Request hold for lender": fromPromise(
-        async ({
-          input,
-        }: {
-          input: {
-            bookid: string;
-            lender: Lender;
-          };
-        }) => {
-          console.log("Starting Request hold for lender", input);
-          await delay(1000);
+      },
+    ),
+    "Request hold for lender": fromPromise(
+      async ({
+        input,
+      }: {
+        input: {
+          bookid: string | undefined;
+          lender: Lender | null;
+        };
+      }) => {
+        console.log("Starting Request hold for lender", input);
+        await delay(1000);
+      },
+    ),
+    "Cancel hold request for lender": fromPromise(
+      async ({
+        input,
+      }: {
+        input: {
+          bookid: string | undefined;
+          lender: Lender | null;
+        };
+      }) => {
+        console.log("Starting Cancel hold request for lender", input);
+        await delay(1000);
+      },
+    ),
+    "Check out book with id": fromPromise(
+      async ({
+        input,
+      }: {
+        input: {
+          bookid: string | undefined;
+        };
+      }) => {
+        console.log("Starting Check out book with id", input);
+        await delay(1000);
+      },
+    ),
+    "Notify Lender for checkout": fromPromise(
+      async ({
+        input,
+      }: {
+        input: {
+          bookid: string | undefined;
+          lender: Lender | null;
+        };
+      }) => {
+        console.log("Starting Notify Lender for checkout", input);
+        await delay(1000);
+      },
+    ),
+  },
+}).createMachine({
+  initial: "Book Lending Request",
+  context: {
+    book: null,
+    lender: null,
+  },
+  states: {
+    "Book Lending Request": {
+      on: {
+        bookLendingRequest: {
+          target: "Get Book Status",
+          context: ({ event }) => ({
+            book: {
+              ...event.book,
+              status: "unknown" as const,
+            },
+          }),
         },
-      ),
-      "Cancel hold request for lender": fromPromise(
-        async ({
-          input,
-        }: {
-          input: {
-            bookid: string;
-            lender: Lender;
-          };
-        }) => {
-          console.log("Starting Cancel hold request for lender", input);
-          await delay(1000);
+      },
+    },
+    "Get Book Status": {
+      invoke: {
+        src: "Get status for book",
+        input: ({ context }) => ({
+          bookid: context.book?.id,
+        }),
+        onDone: {
+          target: "Book Status Decision",
+          // TODO: Fix typing issue
+          context: ({ context, output }) => ({
+            book: {
+              ...context.book!,
+
+              status: output.status,
+            },
+          }),
         },
-      ),
-      "Check out book with id": fromPromise(
-        async ({
-          input,
-        }: {
-          input: {
-            bookid: string;
-          };
-        }) => {
-          console.log("Starting Check out book with id", input);
-          await delay(1000);
+      },
+    },
+    "Book Status Decision": {
+      always: ({ context }) =>
+        context.book?.status === "onloan"
+          ? { target: "Report Status To Lender" }
+          : context.book?.status === "available"
+            ? { target: "Check Out Book" }
+            : { target: "End" },
+    },
+    "Report Status To Lender": {
+      invoke: {
+        src: "Send status to lender",
+        input: ({ context }) => ({
+          bookid: context.book?.id,
+          message: `Book ${String(context.book?.title)} is already on loan`,
+        }),
+        onDone: {
+          target: "Wait for Lender response",
         },
-      ),
-      "Notify Lender for checkout": fromPromise(
-        async ({
-          input,
-        }: {
-          input: {
-            bookid: string;
-            lender: Lender;
-          };
-        }) => {
-          console.log("Starting Notify Lender for checkout", input);
-          await delay(1000);
+      },
+    },
+    "Wait for Lender response": {
+      on: {
+        holdBook: {
+          target: "Request Hold",
         },
-      ),
+        declineBookhold: {
+          target: "Cancel Request",
+        },
+      },
+    },
+    "Request Hold": {
+      invoke: {
+        src: "Request hold for lender",
+        input: ({ context }) => ({
+          bookid: context.book?.id,
+          lender: context.lender,
+        }),
+        onDone: {
+          target: "Sleep two weeks",
+        },
+      },
+    },
+    "Cancel Request": {
+      invoke: {
+        src: "Cancel hold request for lender",
+        input: ({ context }) => ({
+          bookid: context.book?.id,
+          lender: context.lender,
+        }),
+        onDone: {
+          target: "End",
+        },
+      },
+    },
+    "Sleep two weeks": {
+      after: {
+        // PT2W (two weeks) in the spec.
+        1_209_600_000: {
+          target: "Get Book Status",
+        },
+      },
+    },
+    "Check Out Book": {
+      initial: "Checking out book",
+      states: {
+        "Checking out book": {
+          invoke: {
+            src: "Check out book with id",
+            input: ({ context }) => ({
+              bookid: context.book?.id,
+            }),
+            onDone: {
+              target: "Notifying Lender",
+            },
+          },
+        },
+        "Notifying Lender": {
+          invoke: {
+            src: "Notify Lender for checkout",
+            input: ({ context }) => ({
+              bookid: context.book?.id,
+              lender: context.lender,
+            }),
+            onDone: {
+              target: "End",
+            },
+          },
+        },
+        End: {
+          type: "final",
+        },
+      },
+    },
+    End: {
+      type: "final",
     },
   },
-);
+});
 
 describeE2E("An book landing workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {

@@ -15,7 +15,7 @@ import { MachineRuntime } from "../../src/restate/object";
 
 describe("machine object runtime", () => {
   const child = createMachine({ id: "child" });
-  const root = setup({ actors: { child } }).createMachine({ id: "root" });
+  const root = setup({ actorSources: { child } }).createMachine({ id: "root" });
   const runtime = new MachineRuntime("machines", root, undefined);
 
   it("uses the root machine when an instance has no persisted machine id", () => {

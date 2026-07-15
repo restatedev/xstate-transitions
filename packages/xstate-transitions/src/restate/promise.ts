@@ -11,7 +11,7 @@
 
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
 import type { NonReducibleUnknown } from "xstate";
-import { fromPromise as xstateFromPromise } from "xstate";
+import { createAsyncLogic } from "xstate";
 
 /**
  * Sentinel marking one of our Restate-managed actors ({@link fromPromise},
@@ -132,7 +132,7 @@ export function fromPromise<TOutput, TInput = NonReducibleUnknown>(
   creator: PromiseCreator<TOutput, TInput>,
   options?: FromPromiseOptions,
 ) {
-  const logic = xstateFromPromise<TOutput, TInput>(rejectDirectStart);
+  const logic = createAsyncLogic<TOutput, TInput>({ run: rejectDirectStart });
   const retry = options?.retry ?? false;
   if (retry === false) {
     return Object.assign(logic, {
@@ -162,7 +162,7 @@ export function fromPromise<TOutput, TInput = NonReducibleUnknown>(
 export function fromHandler<TOutput, TInput = NonReducibleUnknown>(
   creator: HandlerCreator<TOutput, TInput>,
 ) {
-  const logic = xstateFromPromise<TOutput, TInput>(rejectDirectStart);
+  const logic = createAsyncLogic<TOutput, TInput>({ run: rejectDirectStart });
   return Object.assign(logic, {
     sentinel: RESTATE_ACTOR,
     kind: "handler",

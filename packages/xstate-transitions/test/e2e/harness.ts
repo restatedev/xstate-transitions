@@ -9,6 +9,7 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
+import type { AnyStateMachine } from "xstate";
 import { describe } from "vitest";
 import {
   createRestateTestActor,
@@ -19,10 +20,15 @@ import {
 /**
  * A machine-actor factory bound to a replay mode. Same shape as
  * {@link createRestateTestActor}, minus the `alwaysReplay` flag (the harness
- * supplies it).
+ * supplies it). Bind `M` explicitly (e.g. `createActor<Snap, typeof machine>`)
+ * when passing a runtime `contract`, so its event/input schemas typecheck
+ * against the concrete machine.
  */
-export type CreateActor = <SnapshotType>(
-  opts: Omit<RunMachineOptions, "alwaysReplay">,
+export type CreateActor = <
+  SnapshotType,
+  M extends AnyStateMachine = AnyStateMachine,
+>(
+  opts: Omit<RunMachineOptions<M>, "alwaysReplay">,
 ) => Promise<RunningMachine<SnapshotType>>;
 
 const REPLAY_MODES = [

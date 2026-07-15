@@ -11,12 +11,19 @@
 
 /*
  * A failed ctx.run attempt must not leak a partial XState Step. The transition
- * below fails after observing user code once, then succeeds; only the successful
- * snapshot and actor effect may be committed.
+ * below fails once (a transient compute failure), then succeeds; only the
+ * successful snapshot and actor effect may be committed. Crucially, the invoked
+ * actor must run exactly once — a leaked effect from the failed attempt would
+ * run it twice.
+ *
+ * NOTE (XState v6): transition functions are evaluated multiple times per
+ * macrostep, so the transient failure is gated on a one-shot flag (consumed on
+ * the first evaluation) and the successful result is deterministic, rather than
+ * counting transition invocations.
  */
 
 import { expect, it } from "vitest";
-import { assign, setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -26,18 +33,17 @@ describeE2E("Transition retry atomicity", (createActor) => {
     "commits no state or effect from a failed Step computation",
     { timeout: 60_000 },
     async () => {
-      let attempts = 0;
+      let failedOnce = false;
       let actorRuns = 0;
       const work = fromPromise<number, number>(async ({ input }) => {
         actorRuns += 1;
         return input;
       });
       const machine = setup({
-        types: {
-          context: {} as { token: number; result?: number },
-          events: {} as { type: "GO" },
+        schemas: {
+          context: types<{ token: number; result?: number }>(),
         },
-        actors: { work },
+        actorSources: { work },
       }).createMachine({
         id: "transition-retry-atomicity",
         context: { token: 0 },
@@ -45,17 +51,12 @@ describeE2E("Transition retry atomicity", (createActor) => {
         states: {
           idle: {
             on: {
-              GO: {
-                target: "working",
-                actions: assign({
-                  token: () => {
-                    attempts += 1;
-                    if (attempts === 1) {
-                      throw new Error("transient transition failure");
-                    }
-                    return attempts;
-                  },
-                }),
+              GO: () => {
+                if (!failedOnce) {
+                  failedOnce = true;
+                  throw new Error("transient transition failure");
+                }
+                return { target: "working", context: { token: 1 } };
               },
             },
           },
@@ -66,7 +67,7 @@ describeE2E("Transition retry atomicity", (createActor) => {
               input: ({ context }) => context.token,
               onDone: {
                 target: "done",
-                actions: assign({ result: ({ event }) => event.output }),
+                context: ({ output }) => ({ result: output }),
               },
             },
           },
@@ -84,9 +85,11 @@ describeE2E("Transition retry atomicity", (createActor) => {
       await eventually(() => actor.snapshot()).toMatchObject({
         status: "done",
         value: "done",
-        context: { token: 2, result: 2 },
+        context: { token: 1, result: 1 },
       });
-      expect(attempts).toBe(2);
+      // The transient failure was exercised, the retry committed clean state,
+      // and the actor effect ran exactly once (no leak from the failed attempt).
+      expect(failedOnce).toBe(true);
       expect(actorRuns).toBe(1);
     },
   );

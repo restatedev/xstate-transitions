@@ -10,33 +10,31 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, createMachine, sendParent, sendTo, setup } from "xstate";
+import { createMachine, setup, types } from "xstate";
 import { eventually } from "./eventually";
 import { describeE2E } from "./harness";
 
 const delayedSelfMachine = setup({
-  types: {
-    context: {} as { seen: string[] },
-    events: {} as { type: "SEEN"; value: string },
+  schemas: {
+    context: types<{ seen: string[] }>(),
+    events: {
+      SEEN: types<{ value: string }>(),
+    },
   },
 }).createMachine({
   id: "delayed-self",
   context: { seen: [] },
-  entry: [
-    sendTo(({ self }) => self, { type: "SEEN", value: "first" }, { delay: 0 }),
-    sendTo(({ self }) => self, { type: "SEEN", value: "second" }, { delay: 0 }),
-  ],
+  entry: ({ self }, enq) => {
+    enq.sendTo(self, { type: "SEEN", value: "first" }, { delay: 0 });
+    enq.sendTo(self, { type: "SEEN", value: "second" }, { delay: 0 });
+  },
   on: {
-    SEEN: {
-      actions: assign({
-        seen: ({ context, event }) => [...context.seen, event.value],
-      }),
-    },
+    SEEN: ({ context, event }) => ({
+      context: { seen: [...context.seen, event.value] },
+    }),
   },
-  always: {
-    guard: ({ context }) => context.seen.length === 2,
-    target: ".done",
-  },
+  always: ({ context }) =>
+    context.seen.length === 2 ? { target: ".done" } : undefined,
   initial: "waiting",
   states: {
     waiting: {},
@@ -46,25 +44,24 @@ const delayedSelfMachine = setup({
 
 const child = createMachine({
   id: "restartable-child",
-  entry: sendParent({ type: "CHILD_READY" }),
+  entry: ({ parent }, enq) => {
+    enq.sendTo(parent, { type: "CHILD_READY" });
+  },
 });
 
 const restartableParent = setup({
-  actors: { child },
-  types: {
-    context: {} as { readyCount: number },
-    events: {} as { type: "CHILD_READY" } | { type: "RESTART" },
+  actorSources: { child },
+  schemas: {
+    context: types<{ readyCount: number }>(),
   },
 }).createMachine({
   id: "restartable-parent",
   context: { readyCount: 0 },
   initial: "running",
   on: {
-    CHILD_READY: {
-      actions: assign({
-        readyCount: ({ context }) => context.readyCount + 1,
-      }),
-    },
+    CHILD_READY: ({ context }) => ({
+      context: { readyCount: context.readyCount + 1 },
+    }),
   },
   states: {
     running: {

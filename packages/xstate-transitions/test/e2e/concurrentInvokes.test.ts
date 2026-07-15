@@ -17,7 +17,7 @@
  */
 
 import { it } from "vitest";
-import { assign, setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -27,8 +27,10 @@ async function delay(ms: number): Promise<void> {
 }
 
 const machine = setup({
-  types: {} as { context: { a: string | null; b: string | null } },
-  actors: {
+  schemas: {
+    context: types<{ a: string | null; b: string | null }>(),
+  },
+  actorSources: {
     actorA: fromPromise(async () => {
       await delay(20);
       return "A";
@@ -51,7 +53,7 @@ const machine = setup({
             src: "actorA",
             onDone: {
               target: "done",
-              actions: assign({ a: ({ event }) => event.output as string }),
+              context: ({ output }) => ({ a: output as string }),
             },
           },
         },
@@ -66,7 +68,7 @@ const machine = setup({
             src: "actorB",
             onDone: {
               target: "done",
-              actions: assign({ b: ({ event }) => event.output as string }),
+              context: ({ output }) => ({ b: output as string }),
             },
           },
         },
