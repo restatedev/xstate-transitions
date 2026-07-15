@@ -211,14 +211,14 @@ export function createMachineObject<
   };
 
   const create = contract?.input
-    ? restate.handlers.object.exclusive(
+    ? restate.createObjectHandler(
         { input: restate.serde.schema(contract.input) },
         createHandler,
       )
     : createHandler;
 
   const send = contract?.event
-    ? restate.handlers.object.exclusive(
+    ? restate.createObjectHandler(
         { input: restate.serde.schema(contract.event) },
         sendHandler,
       )
@@ -243,7 +243,7 @@ export function createMachineObject<
     handlers: {
       create,
 
-      initChild: restate.handlers.object.exclusive(
+      initChild: restate.createObjectHandler(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, request: InitRequest) => {
           clearRuntimeState(context);
@@ -261,14 +261,14 @@ export function createMachineObject<
 
       send,
 
-      deliverEvent: restate.handlers.object.exclusive(
+      deliverEvent: restate.createObjectHandler(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, event: AnyEventObject) => {
           await applyEvent(context, event);
         },
       ),
 
-      actorDone: restate.handlers.object.exclusive(
+      actorDone: restate.createObjectHandler(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, request: ActorDoneRequest) => {
           if (
@@ -287,7 +287,7 @@ export function createMachineObject<
         },
       ),
 
-      actorError: restate.handlers.object.exclusive(
+      actorError: restate.createObjectHandler(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, request: ActorErrorRequest) => {
           if (
@@ -306,7 +306,7 @@ export function createMachineObject<
         },
       ),
 
-      deliverScheduled: restate.handlers.object.exclusive(
+      deliverScheduled: restate.createObjectHandler(
         { ingressPrivate: true },
         async (context: restate.ObjectContext, request: ScheduledEvent) => {
           const scheduled = await getScheduled(context);
@@ -436,7 +436,7 @@ export function createMachineObject<
         },
       ),
 
-      cleanupState: restate.handlers.object.exclusive(
+      cleanupState: restate.createObjectHandler(
         { ingressPrivate: true },
         async (context: restate.ObjectContext) => {
           markDisposedAndClear(context);
