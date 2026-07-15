@@ -17,12 +17,12 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, setup } from "xstate";
+import { setup } from "xstate";
 import { fromHandler } from "../../src";
 import { describeE2E } from "./harness";
 
 const dateMachine = setup({
-  actors: {
+  actorSources: {
     // ctx-aware: reads the deterministic Restate clock, so it uses fromHandler.
     getCurrentDate: fromHandler(async ({ ctx }) => ctx.date.now()),
   },
@@ -35,7 +35,7 @@ const dateMachine = setup({
       on: {
         submit: {
           target: "gettingRestateDate",
-          actions: assign({ submittedAt: () => Date.now() }),
+          context: () => ({ submittedAt: Date.now() }),
         },
       },
     },
@@ -44,7 +44,7 @@ const dateMachine = setup({
         src: "getCurrentDate",
         onDone: {
           target: "done",
-          actions: assign({ restateDate: ({ event }) => event.output }),
+          context: ({ output }) => ({ restateDate: output }),
         },
       },
     },

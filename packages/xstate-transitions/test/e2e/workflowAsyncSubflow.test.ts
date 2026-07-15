@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { assign, setup } from "xstate";
+import { setup } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -18,7 +18,7 @@ import { describeE2E } from "./harness";
 const prompt = (_question: string) => Promise.resolve("bob");
 
 const onboardingWorkflow = setup({
-  actors: {
+  actorSources: {
     prompt: fromPromise(async ({ input }: { input: { question: string } }) => {
       const response = await prompt(input.question);
       return {
@@ -41,8 +41,8 @@ const onboardingWorkflow = setup({
         },
         onDone: {
           target: "Personalize",
-          actions: assign({
-            name: ({ event }) => event.output.response,
+          context: ({ output }) => ({
+            name: output.response,
           }),
         },
       },
@@ -53,7 +53,7 @@ const onboardingWorkflow = setup({
         input: ({ context }) => ({
           question: `Welcome ${String(context.name)}, press enter to finish the onboarding process`,
         }),
-        onDone: "Completed",
+        onDone: { target: "Completed" },
       },
     },
     Completed: {
@@ -63,7 +63,7 @@ const onboardingWorkflow = setup({
 });
 
 export const workflow = setup({
-  actors: {
+  actorSources: {
     onboarding: onboardingWorkflow,
   },
 }).createMachine({
@@ -73,7 +73,7 @@ export const workflow = setup({
     Onboard: {
       invoke: {
         src: "onboarding",
-        onDone: "Onboarded",
+        onDone: { target: "Onboarded" },
       },
     },
     Onboarded: {

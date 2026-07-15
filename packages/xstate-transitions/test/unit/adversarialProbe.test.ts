@@ -12,13 +12,10 @@
 import { describe, expect, it } from "vitest";
 import {
   type AnyMachineSnapshot,
-  assign,
+  createAsyncLogic,
   createMachine,
-  forwardTo,
-  fromPromise,
   initialTransition,
-  sendParent,
-  sendTo,
+  isBuiltInExecutableAction,
   setup,
   transition,
 } from "xstate";
@@ -35,7 +32,12 @@ import { fromStored, toStored } from "../../src/xstate/snapshot";
 const jsonRoundTrip = <T>(value: T): T =>
   JSON.parse(JSON.stringify(value)) as T;
 
-describe("temporary adversarial probes", () => {
+const builtIn = (actions: unknown[], type: string): any =>
+  actions.find(
+    (a) => isBuiltInExecutableAction(a as any) && (a as any).type === type,
+  );
+
+describe("adversarial probes (v6 pure-transition shapes)", () => {
   it("preserves deep history across nested parallel regions", () => {
     const machine = createMachine({
       id: "deep-parallel-history",
@@ -43,7 +45,7 @@ describe("temporary adversarial probes", () => {
       states: {
         session: {
           initial: "work",
-          on: { PAUSE: "paused" },
+          on: { PAUSE: { target: "paused" } },
           states: {
             work: {
               type: "parallel",
@@ -53,20 +55,28 @@ describe("temporary adversarial probes", () => {
                   states: {
                     outer: {
                       initial: "one",
-                      states: { one: { on: { LEFT: "two" } }, two: {} },
+                      states: {
+                        one: { on: { LEFT: { target: "two" } } },
+                        two: {},
+                      },
                     },
                   },
                 },
                 right: {
                   initial: "one",
-                  states: { one: { on: { RIGHT: "two" } }, two: {} },
+                  states: {
+                    one: { on: { RIGHT: { target: "two" } } },
+                    two: {},
+                  },
                 },
               },
             },
             hist: { type: "history", history: "deep" },
           },
         },
-        paused: { on: { RESUME: "#deep-parallel-history.session.hist" } },
+        paused: {
+          on: { RESUME: { target: "#deep-parallel-history.session.hist" } },
+        },
       },
     });
 
@@ -85,71 +95,71 @@ describe("temporary adversarial probes", () => {
     });
   });
 
-  it("shows the router action shape for delayed sendTo(self)", () => {
+  it("shows the @xstate.sendTo shape for a delayed sendTo(self)", () => {
     const machine = createMachine({
       id: "self-send",
-      entry: sendTo(
-        ({ self }) => self,
-        { type: "PING" },
-        { delay: 10, id: "self-delay" },
-      ),
+      entry: ({ self }, enq) => {
+        enq.sendTo(self, { type: "PING" }, { delay: 10, id: "self-delay" });
+      },
     });
     const [, actions] = initialTransition(machine);
-    const action = actions.find(
-      (candidate) => candidate.type === "xstate.sendTo",
-    ) as any;
-    expect(action.params).toMatchObject({
+    const action = builtIn(actions, "@xstate.sendTo");
+    expect(action).toMatchObject({
       event: { type: "PING" },
       delay: 10,
       id: "self-delay",
     });
-    expect(action.params.targetId).toBeUndefined();
-    expect(action.params.to.id).toMatch(/^x:/);
+    // The target is the self actor ref (not a #_parent or child id).
+    expect(action.target).toBeDefined();
   });
 
-  it("shows spawn-in-assign creates a child but emits no action carrying its input", () => {
+  it("emits an @xstate.spawn action carrying its input for an entry spawn", () => {
     const child = createMachine({
       id: "spawn-input-child",
+
       context: ({ input }: any) => ({ received: input }),
     });
-    const parent = setup({ actors: { child } }).createMachine({
+    const parent = setup({ actorSources: { child } }).createMachine({
       id: "spawn-input-parent",
       context: { ref: undefined as unknown },
-      entry: assign({
-        ref: ({ spawn }) =>
-          spawn("child", { id: "child", input: { answer: 42 } }),
+      entry: (_, enq) => ({
+        context: {
+          ref: enq.spawn(child, { id: "child", input: { answer: 42 } }),
+        },
       }),
     });
     const [snapshot, actions] = initialTransition(parent);
-    const spawn = actions.find(
-      (candidate) => candidate.type === "xstate.spawnChild",
-    ) as any;
+    const spawn = builtIn(actions, "@xstate.spawn");
+    // Unlike v5's spawn-in-assign (which emitted no action), v6 always emits an
+    // @xstate.spawn carrying the id and resolved input.
     expect(snapshot.children.child).toBeDefined();
-    expect(spawn).toBeUndefined();
+    expect(spawn).toBeDefined();
+    expect(spawn.input).toEqual({ answer: 42 });
   });
 
-  it("captures ordinary invoke input in its emitted spawnChild action", () => {
+  it("captures ordinary invoke input in its emitted @xstate.spawn action", () => {
     const child = createMachine({ id: "invoke-input-child" });
-    const parent = setup({ actors: { child } }).createMachine({
+    const parent = setup({ actorSources: { child } }).createMachine({
       id: "invoke-input-parent",
       invoke: { id: "child", src: "child", input: { answer: 42 } },
     });
     const [, actions] = initialTransition(parent);
-    const spawn = actions.find(
-      (candidate) => candidate.type === "xstate.spawnChild",
-    ) as any;
-    expect(spawn.params.input).toEqual({ answer: 42 });
+    const spawn = builtIn(actions, "@xstate.spawn");
+    expect(spawn.input).toEqual({ answer: 42 });
   });
 
   it("keeps an actor-ref sendTo routable after context JSON serialization", () => {
     const child = createMachine({ id: "ref-child" });
-    const parent = setup({ actors: { child } }).createMachine({
+    const parent = setup({ actorSources: { child } }).createMachine({
       id: "ref-parent",
+
       context: { ref: undefined as any },
-      entry: assign({ ref: ({ spawn }) => spawn("child", { id: "child" }) }),
+      entry: (_, enq) => ({
+        context: { ref: enq.spawn(child, { id: "child" }) },
+      }),
       on: {
-        SEND: {
-          actions: sendTo(({ context }) => context.ref, { type: "PING" }),
+        SEND: ({ context }, enq) => {
+          enq.sendTo(context.ref, { type: "PING" });
         },
       },
     });
@@ -162,24 +172,30 @@ describe("temporary adversarial probes", () => {
     const [, actions] = transition(parent, rehydrated, {
       type: "SEND",
     } as never);
-    const send = actions.find(
-      (candidate) => candidate.type === "xstate.sendTo",
-    ) as any;
-    expect(send.params.targetId).toBeUndefined();
-    expect(send.params.to).toEqual({ xstate$$type: 1, id: "child" });
+    const send = builtIn(actions, "@xstate.sendTo");
+    // The serialized ref stays routable: its id resolves the child target.
+    expect(send.target?.id).toBe("child");
   });
 
-  it("keeps sendParent and forwardTo resolvable with fabricated refs", () => {
+  it("keeps sendTo(parent) and forwardTo resolvable with fabricated refs", () => {
     const child = createMachine({
       id: "scope-child",
       initial: "idle",
-      entry: sendParent({ type: "READY" }),
+      entry: ({ parent }, enq) => {
+        enq.sendTo(parent, { type: "READY" });
+      },
       states: {
-        idle: { on: { GO: { actions: sendParent({ type: "DONE" }) } } },
+        idle: {
+          on: {
+            GO: ({ parent }, enq) => {
+              enq.sendTo(parent, { type: "DONE" });
+            },
+          },
+        },
       },
     });
     const [, entryActions] = runInitial(child, undefined, true);
-    expect((entryActions[0] as any).params.targetId).toBe("#_parent");
+    expect(builtIn(entryActions, "@xstate.sendTo").target.id).toBe("#_parent");
     const [childSnapshot] = runInitial(child, undefined, true);
     const [, childActions] = runTransition(
       child,
@@ -187,12 +203,16 @@ describe("temporary adversarial probes", () => {
       { type: "GO" },
       true,
     );
-    expect((childActions[0] as any).params.targetId).toBe("#_parent");
+    expect(builtIn(childActions, "@xstate.sendTo").target.id).toBe("#_parent");
 
-    const parent = setup({ actors: { child } }).createMachine({
+    const parent = setup({ actorSources: { child } }).createMachine({
       id: "scope-parent",
       invoke: { id: "child", src: "child" },
-      on: { FORWARD: { actions: forwardTo("child") } },
+      on: {
+        FORWARD: ({ children, event }, enq) => {
+          enq.sendTo(children.child, event);
+        },
+      },
     });
     const [parentSnapshot] = initialTransition(parent);
     const rehydrated = fromStored(
@@ -203,14 +223,16 @@ describe("temporary adversarial probes", () => {
     const [, forwardActions] = transition(parent, rehydrated, {
       type: "FORWARD",
     } as never);
-    expect((forwardActions[0] as any).params.targetId).toBe("child");
+    expect(builtIn(forwardActions, "@xstate.sendTo").target.id).toBe("child");
   });
 
-  it("routes a normalized vanilla-promise error through a message guard", async () => {
+  it("routes a normalized vanilla-actor error through a message guard", async () => {
     const machine = setup({
-      actors: {
-        boom: fromPromise(async () => {
-          throw new Error("MATCH_ME");
+      actorSources: {
+        boom: createAsyncLogic({
+          run: async () => {
+            throw new Error("MATCH_ME");
+          },
         }),
       },
     }).createMachine({
@@ -219,15 +241,12 @@ describe("temporary adversarial probes", () => {
       states: {
         run: {
           invoke: {
+            id: "boom",
             src: "boom",
-            onError: [
-              {
-                guard: ({ event }) =>
-                  (event.error as any).message === "MATCH_ME",
-                target: "matched",
-              },
-              { target: "missed" },
-            ],
+            onError: ({ event }) =>
+              (event.error as any)?.message === "MATCH_ME"
+                ? { target: "matched" }
+                : { target: "missed" },
           },
         },
         matched: { type: "final" },
@@ -235,21 +254,21 @@ describe("temporary adversarial probes", () => {
       },
     });
     const [snapshot, actions] = initialTransition(machine);
-    const spawn = actions.find(
-      (candidate) => candidate.type === "xstate.spawnChild",
-    ) as any;
-    // Vanilla actors now run inside ctx.run, so provide a minimal fake that just
+    const spawn = builtIn(actions, "@xstate.spawn");
+    // Vanilla actors run inside ctx.run, so provide a minimal fake that just
     // executes the action.
     const fakeCtx = { run: (_name: string, action: () => unknown) => action() };
-    const outcome = await runActor(machine, spawn.params, fakeCtx as any);
+    const outcome = await runActor(
+      machine,
+      { id: spawn.id, src: spawn.src, input: spawn.input },
+
+      fakeCtx as any,
+    );
     expect(outcome).toMatchObject({
       error: { name: "Error", message: "MATCH_ME" },
     });
     if (outcome.status !== "error") throw new Error("Expected actor failure");
-    const errorEvent = createNormalizedErrorActorEvent(
-      spawn.params.id,
-      outcome.error,
-    );
+    const errorEvent = createNormalizedErrorActorEvent(spawn.id, outcome.error);
     const [next] = transition(machine, snapshot, errorEvent as never);
     expect(next).toMatchObject({ status: "done", value: "matched" });
   });
@@ -260,7 +279,7 @@ describe("temporary adversarial probes", () => {
       initial: "child",
       states: { child: {} },
     });
-    const parent = setup({ actors: { child } }).createMachine({
+    const parent = setup({ actorSources: { child } }).createMachine({
       id: "duplicate",
       initial: "parent",
       states: { parent: { invoke: { id: "kid", src: "child" } } },
@@ -270,28 +289,28 @@ describe("temporary adversarial probes", () => {
     );
   });
 
-  it("shows that exiting an invoke emits the currently ignored stopChild action", () => {
+  it("removes an exited invoke's child from children without a stop action", () => {
     const child = createMachine({ id: "teardown-child" });
-    const parent = setup({ actors: { child } }).createMachine({
+    const parent = setup({ actorSources: { child } }).createMachine({
       id: "teardown-parent",
       initial: "running",
       states: {
         running: {
           invoke: { id: "kid", src: "child" },
-          on: { CANCEL: "idle" },
+          on: { CANCEL: { target: "idle" } },
         },
-        idle: { on: { AGAIN: "running" } },
+        idle: { on: { AGAIN: { target: "running" } } },
       },
     });
     const [snapshot] = initialTransition(parent);
-    const [, actions] = transition(parent, snapshot, {
+    expect(snapshot.children.kid).toBeDefined();
+    const [next, actions] = transition(parent, snapshot, {
       type: "CANCEL",
     } as never);
-    expect(
-      actions.some(
-        (action) =>
-          (action as unknown as { type: string }).type === "xstate.stopChild",
-      ),
-    ).toBe(true);
+    // v6 does not emit a stop action on invoke exit; the child simply disappears
+    // from the post-transition snapshot.children. The integration derives the
+    // stopChild effect from that diff instead.
+    expect(next.children.kid).toBeUndefined();
+    expect(builtIn(actions, "@xstate.stop")).toBeUndefined();
   });
 });

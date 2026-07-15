@@ -10,7 +10,7 @@
  */
 
 import { expect, it, vi } from "vitest";
-import { assign, setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { wait } from "./eventually";
 import { describeE2E } from "./harness";
@@ -30,11 +30,10 @@ function generationMachine(pending: PendingRun[]) {
   );
 
   return setup({
-    types: {
-      context: {} as { generation: number; result?: string },
-      events: {} as { type: "REENTER" },
+    schemas: {
+      context: types<{ generation: number; result?: string }>(),
     },
-    actors: { work },
+    actorSources: { work },
   }).createMachine({
     id: "stale-promise-completion",
     context: { generation: 1 },
@@ -47,16 +46,16 @@ function generationMachine(pending: PendingRun[]) {
           input: ({ context }) => ({ generation: context.generation }),
           onDone: {
             target: "done",
-            actions: assign({ result: ({ event }) => event.output }),
+            context: ({ output }) => ({ result: output }),
           },
-          onError: "failed",
+          onError: { target: "failed" },
         },
         on: {
           REENTER: {
             target: "running",
             reenter: true,
-            actions: assign({
-              generation: ({ context }) => context.generation + 1,
+            context: ({ context }) => ({
+              generation: context.generation + 1,
             }),
           },
         },

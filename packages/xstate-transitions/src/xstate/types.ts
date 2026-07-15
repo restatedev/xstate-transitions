@@ -9,7 +9,11 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import type { AnyEventObject, SnapshotStatus } from "xstate";
+import type {
+  AnyEventObject,
+  ExecutableActionObject,
+  SnapshotStatus,
+} from "xstate";
 
 // ---------------------------------------------------------------------------
 // Shared types for the pure (Restate-free) layer. Kept in one self-contained
@@ -51,14 +55,12 @@ export type ConditionOutcome =
   | { status: "reject"; reason: string };
 
 /**
- * One executable action emitted by xstate's pure transition. Params are
- * loosely typed here (xstate does not export precise shapes); the interpreter
- * narrows them per action `type`.
+ * One executable action emitted by xstate's pure transition (the v6 effect
+ * model). The interpreter narrows the built-in members (`@xstate.spawn`,
+ * `@xstate.sendTo`, `@xstate.raise`, `@xstate.cancel`, `@xstate.stop`) with
+ * xstate's `isBuiltInExecutableAction` and reads their stable named fields.
  */
-export interface Action {
-  type: string;
-  params: unknown;
-}
+export type Action = ExecutableActionObject;
 
 /** Where a routed event is delivered. */
 export type Target =

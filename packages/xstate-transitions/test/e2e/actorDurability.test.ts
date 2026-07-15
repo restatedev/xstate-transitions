@@ -20,12 +20,7 @@
  */
 
 import { expect, it } from "vitest";
-import {
-  assign,
-  setup,
-  type AnyActorLogic,
-  fromPromise as xstateFromPromise,
-} from "xstate";
+import { setup, type AnyActorLogic, createAsyncLogic } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -33,7 +28,7 @@ import { describeE2E } from "./harness";
 type CounterSnapshot = { status?: string; context: { result: number } };
 
 const counterMachine = (work: AnyActorLogic) =>
-  setup({ actors: { work } }).createMachine({
+  setup({ actorSources: { work } }).createMachine({
     id: "durability",
     initial: "running",
     context: { result: 0 },
@@ -43,7 +38,7 @@ const counterMachine = (work: AnyActorLogic) =>
           src: "work",
           onDone: {
             target: "done",
-            actions: assign({ result: ({ event }) => event.output as number }),
+            context: ({ output }) => ({ result: output as number }),
           },
         },
       },
@@ -58,7 +53,7 @@ describeE2E("Actor durability (exactly-once via ctx.run)", (createActor) => {
     async () => {
       let runs = 0;
       using actor = await createActor<CounterSnapshot>({
-        machine: counterMachine(xstateFromPromise(async () => ++runs)),
+        machine: counterMachine(createAsyncLogic({ run: async () => ++runs })),
       });
 
       await eventually(() => actor.snapshot()).toMatchObject({

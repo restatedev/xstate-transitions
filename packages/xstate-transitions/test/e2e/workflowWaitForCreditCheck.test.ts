@@ -20,7 +20,7 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { describeE2E } from "./harness";
 
@@ -34,15 +34,17 @@ interface Customer {
 }
 
 const workflow = setup({
-  types: {
-    context: {} as {
+  schemas: {
+    context: types<{
       customer: Customer | null;
       creditCheck: { decision: "Approved" | "Denied" } | null;
+    }>(),
+    input: types<{ customer: Customer }>(),
+    events: {
+      start: types<{ customer: Customer }>(),
     },
-    input: {} as { customer: Customer },
-    events: {} as { type: "start"; customer: Customer },
   },
-  actors: {
+  actorSources: {
     callCreditCheckMicroservice: fromPromise(
       ({ input }: { input: { customer: Customer } }) =>
         Promise.resolve({
@@ -65,7 +67,6 @@ const workflow = setup({
       },
     ),
   },
-  delays: { PT15M: 15 * 60 * 1000 },
 }).createMachine({
   id: "customercreditcheck",
   initial: "WaitForInput",
@@ -74,7 +75,7 @@ const workflow = setup({
     WaitForInput: {
       on: {
         start: {
-          actions: assign({ customer: ({ event }) => event.customer }),
+          context: ({ event }) => ({ customer: event.customer }),
           target: "CheckCredit",
         },
       },
@@ -86,19 +87,17 @@ const workflow = setup({
         input: ({ context }) => ({ customer: context.customer! }),
         onDone: {
           target: "EvaluateDecision",
-          actions: assign({ creditCheck: ({ event }) => event.output }),
+          context: ({ output }) => ({ creditCheck: output }),
         },
       },
-      after: { PT15M: "Timeout" },
+      // PT15M (15 minutes) in the spec.
+      after: { 900_000: { target: "Timeout" } },
     },
     EvaluateDecision: {
-      always: [
-        {
-          guard: ({ context }) => context.creditCheck?.decision === "Approved",
-          target: "StartApplication",
-        },
-        { target: "RejectApplication" },
-      ],
+      always: ({ context }) =>
+        context.creditCheck?.decision === "Approved"
+          ? { target: "StartApplication" }
+          : { target: "RejectApplication" },
       tags: ["EvaluateDecision"],
     },
     StartApplication: {

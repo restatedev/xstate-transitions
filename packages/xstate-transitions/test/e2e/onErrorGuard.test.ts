@@ -23,7 +23,7 @@ import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 const machine = setup({
-  actors: {
+  actorSources: {
     boom: fromPromise(async () => {
       throw new Error("NOT_FOUND");
     }),
@@ -35,16 +35,12 @@ const machine = setup({
     run: {
       invoke: {
         src: "boom",
-        onDone: "ok",
-        onError: [
-          {
-            guard: ({ event }) =>
-              (event.error as { message?: string } | undefined)?.message ===
-              "NOT_FOUND",
-            target: "notFound",
-          },
-          { target: "otherError" },
-        ],
+        onDone: { target: "ok" },
+        onError: ({ event }) =>
+          (event.error as { message?: string } | undefined)?.message ===
+          "NOT_FOUND"
+            ? { target: "notFound" }
+            : { target: "otherError" },
       },
     },
     ok: { type: "final" },

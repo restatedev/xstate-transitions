@@ -17,7 +17,7 @@
  */
 
 import { it } from "vitest";
-import { createMachine, raise } from "xstate";
+import { createMachine } from "xstate";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
@@ -27,10 +27,13 @@ const machine = createMachine({
   states: {
     start: {
       on: {
-        BEGIN: { target: "middle", actions: raise({ type: "AUTO" }) },
+        BEGIN: (_, enq) => {
+          enq.raise({ type: "AUTO" });
+          return { target: "middle" };
+        },
       },
     },
-    middle: { on: { AUTO: "end" } },
+    middle: { on: { AUTO: { target: "end" } } },
     end: { type: "final" },
   },
 });

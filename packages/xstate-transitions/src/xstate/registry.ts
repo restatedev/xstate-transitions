@@ -50,7 +50,10 @@ export function buildRegistry(
     }
     registry.set(m.id, m);
 
-    const actors = (m.implementations?.actors ?? {}) as Record<string, unknown>;
+    const actors = (m.implementations?.actorSources ?? {}) as Record<
+      string,
+      unknown
+    >;
     for (const actor of Object.values(actors)) {
       if (isMachine(actor)) visit(actor);
     }

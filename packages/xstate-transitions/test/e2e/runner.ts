@@ -19,11 +19,14 @@ import { type AnyEventObject } from "xstate";
 import type { Condition, MachineVirtualObject } from "../../src";
 import { createMachineObject, type MachineObjectOptions } from "../../src";
 
-export type RunMachineOptions = {
-  machine: AnyStateMachine;
+export type RunMachineOptions<M extends AnyStateMachine = AnyStateMachine> = {
+  machine: M;
   key?: string;
   input?: unknown;
-  options?: MachineObjectOptions;
+  // Bound to the concrete machine so a runtime contract's event/input schemas
+  // typecheck. In v6 `EventFrom<AnyStateMachine>` is `never`, so the default
+  // param would reject a concrete `StandardSchema<SomeEvent>`.
+  options?: MachineObjectOptions<M>;
   /**
    * Force restate-server to always replay at suspension points, surfacing any
    * non-determinism in the handlers. Set by the parameterized e2e harness.
@@ -43,9 +46,10 @@ export type RunningMachine<SnapshotType> = {
   [Symbol.dispose](): void;
 };
 
-export async function createRestateTestActor<SnapshotType>(
-  opts: RunMachineOptions,
-): Promise<RunningMachine<SnapshotType>> {
+export async function createRestateTestActor<
+  SnapshotType,
+  M extends AnyStateMachine = AnyStateMachine,
+>(opts: RunMachineOptions<M>): Promise<RunningMachine<SnapshotType>> {
   const obj = createMachineObject("default", opts.machine, opts.options);
   const env = await RestateTestEnvironment.start(
     { services: [obj], alwaysReplay: opts.alwaysReplay ?? false },
@@ -61,10 +65,23 @@ export async function createRestateTestActor<SnapshotType>(
     const rs = clients.connect({
       url: env.baseUrl(),
     });
+    // This generic runner works with any machine, so it erases the client to a
+    // loose test shape. (A real caller keeps its concrete machine type, whose
+    // `EventFrom<M>` is precise; only `AnyStateMachine` erases the event type to
+    // `never` under v6.)
     const client = rs.objectClient<MachineVirtualObject<AnyStateMachine>>(
       { name: "default" },
       opts.key ?? "default",
-    );
+    ) as unknown as {
+      create: (input: object) => Promise<void>;
+      send: (event: AnyEventObject) => Promise<void>;
+      snapshot: () => Promise<unknown>;
+      waitFor: (req: {
+        condition: Condition;
+        event?: AnyEventObject;
+        timeout?: number;
+      }) => Promise<unknown>;
+    };
     await client.create({ ...(opts.input ?? {}) });
     return {
       create: async (input?: unknown) => {

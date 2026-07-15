@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -24,15 +24,15 @@ interface Applicant {
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#applicant-request-decision-example
 export const workflow = setup({
-  types: {} as {
-    context: {
+  schemas: {
+    context: types<{
       applicant: Applicant;
-    };
-    input: {
+    }>(),
+    input: types<{
       applicant: Applicant;
-    };
+    }>(),
   },
-  actors: {
+  actorSources: {
     startApplicationWorkflowId: fromPromise(async () => {
       console.log("startApplicationWorkflowId workflow started");
 
@@ -46,9 +46,6 @@ export const workflow = setup({
       console.log("sendRejectionEmailFunction workflow completed");
     }),
   },
-  guards: {
-    isOver18: ({ context }) => context.applicant.age >= 18,
-  },
 }).createMachine({
   id: "applicantrequest",
 
@@ -59,33 +56,26 @@ export const workflow = setup({
   states: {
     CheckApplication: {
       on: {
-        Submit: [
-          {
-            target: "StartApplication",
-            guard: "isOver18",
-            reenter: false,
-          },
-          {
-            target: "RejectApplication",
-            reenter: false,
-          },
-        ],
+        Submit: ({ context }) =>
+          context.applicant.age >= 18
+            ? { target: "StartApplication", reenter: false }
+            : { target: "RejectApplication", reenter: false },
       },
     },
     StartApplication: {
       invoke: {
         src: "startApplicationWorkflowId",
-        onDone: "End",
-        onError: "RejectApplication",
+        onDone: { target: "End" },
+        onError: { target: "RejectApplication" },
       },
     },
     RejectApplication: {
       invoke: {
         src: "sendRejectionEmailFunction",
-        input: ({ context }) => ({
+        input: ({ context }: { context: { applicant: Applicant } }) => ({
           applicant: context.applicant,
         }),
-        onDone: "End",
+        onDone: { target: "End" },
       },
     },
     End: {

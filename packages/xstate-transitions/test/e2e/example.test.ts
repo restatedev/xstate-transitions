@@ -10,7 +10,7 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, createMachine } from "xstate";
+import { createMachine } from "xstate";
 import { describeE2E } from "./harness";
 
 const xmachine = createMachine({
@@ -19,16 +19,8 @@ const xmachine = createMachine({
     count: 0,
   },
   on: {
-    inc: {
-      actions: assign({
-        count: ({ context }) => context.count + 1,
-      }),
-    },
-    dec: {
-      actions: assign({
-        count: ({ context }) => context.count - 1,
-      }),
-    },
+    inc: ({ context }) => ({ context: { count: context.count + 1 } }),
+    dec: ({ context }) => ({ context: { count: context.count - 1 } }),
   },
 });
 

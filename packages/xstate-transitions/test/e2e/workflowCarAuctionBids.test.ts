@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { assign, createMachine, type SnapshotFrom } from "xstate";
+import { createMachine, type SnapshotFrom, types } from "xstate";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
@@ -25,53 +25,47 @@ interface Bid {
 }
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#handle-car-auction-bids-example
-export const workflow = createMachine(
-  {
-    id: "handleCarAuctionBid",
-    description: "Store a single bid whole the car auction is active",
-    initial: "StoreCarAuctionBid",
-    types: {} as {
-      context: {
-        bids: Bid[];
-      };
-      events: {
-        type: "CarBidEvent";
+export const workflow = createMachine({
+  id: "handleCarAuctionBid",
+  description: "Store a single bid whole the car auction is active",
+  initial: "StoreCarAuctionBid",
+  schemas: {
+    context: types<{
+      bids: Bid[];
+    }>(),
+    events: {
+      CarBidEvent: types<{
         bid: Bid;
-      };
+      }>(),
     },
-    context: {
-      bids: [],
-    },
-    states: {
-      StoreCarAuctionBid: {
-        on: {
-          CarBidEvent: {
-            actions: assign({
-              bids: ({ context, event }) => [...context.bids, event.bid],
-            }),
+  },
+  context: {
+    bids: [],
+  },
+  states: {
+    StoreCarAuctionBid: {
+      on: {
+        CarBidEvent: ({ context, event }) => ({
+          context: {
+            bids: [...context.bids, event.bid],
           },
-        },
-        after: {
-          BiddingDelay: "BiddingEnded",
-        },
+        }),
       },
-      BiddingEnded: {
-        type: "final",
+      after: {
+        3000: { target: "BiddingEnded" },
       },
     },
-    output: ({ context }) => ({
-      // highest bid
-      winningBid: context.bids.reduce((prev, current) =>
-        prev.amount > current.amount ? prev : current,
-      ),
-    }),
-  },
-  {
-    delays: {
-      BiddingDelay: 3000,
+    BiddingEnded: {
+      type: "final",
     },
   },
-);
+  output: ({ context }) => ({
+    // highest bid
+    winningBid: context.bids.reduce((prev, current) =>
+      prev.amount > current.amount ? prev : current,
+    ),
+  }),
+});
 
 describeE2E("A car auction bidding workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {

@@ -19,7 +19,7 @@
 
 import { TerminalError } from "@restatedev/restate-sdk";
 import { expect, it, vi } from "vitest";
-import { setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise, type FromPromiseOptions } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -29,11 +29,11 @@ const emailMachine = (
   options?: FromPromiseOptions,
 ) =>
   setup({
-    types: {
-      input: {} as { customer: string },
-      context: {} as { customer: string },
+    schemas: {
+      input: types<{ customer: string }>(),
+      context: types<{ customer: string }>(),
     },
-    actors: {
+    actorSources: {
       sendEmail: fromPromise<undefined, { customer: string }>(
         async ({ input }) => {
           await sendEmail(input.customer);
@@ -50,8 +50,8 @@ const emailMachine = (
         invoke: {
           src: "sendEmail",
           input: ({ context }) => ({ customer: context.customer }),
-          onDone: "Email sent",
-          onError: "Failed",
+          onDone: { target: "Email sent" },
+          onError: { target: "Failed" },
         },
       },
       "Email sent": { type: "final" },

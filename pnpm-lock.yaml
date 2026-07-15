@@ -16,8 +16,8 @@ catalogs:
       specifier: 1.16.1
       version: 1.16.1
     xstate:
-      specifier: 5.32.4
-      version: 5.32.4
+      specifier: 6.0.0-alpha.21
+      version: 6.0.0-alpha.21
 
 importers:
 
@@ -64,7 +64,7 @@ importers:
         version: link:../xstate-transitions
       xstate:
         specifier: 'catalog:'
-        version: 5.32.4
+        version: 6.0.0-alpha.21
 
   packages/xstate-transitions:
     dependencies:
@@ -73,7 +73,7 @@ importers:
         version: 1.16.1
       xstate:
         specifier: 'catalog:'
-        version: 5.32.4
+        version: 6.0.0-alpha.21
     devDependencies:
       '@restatedev/restate-sdk-clients':
         specifier: 'catalog:'
@@ -1939,8 +1939,9 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  xstate@5.32.4:
-    resolution: {integrity: sha512-E5WtDB8DBs2ZWliz2Ry9XfbSZTbBRcK/cwefBot04qQ/L5SLP16xpnTDU4/ZFXuXFhNxi7JP2RhuoGwBnM+S4A==}
+  xstate@6.0.0-alpha.21:
+    resolution: {integrity: sha512-R5zlOWEVip0R0nKbTpbrnYQ6cS60obOg3b8xWSUKx5oH2NQfZup2JPRTWh9dygxgqOGLnLAY5K0sRkiTTNh1Ww==}
+    hasBin: true
 
   y18n@5.0.8:
     resolution: {integrity: sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA==}
@@ -3742,7 +3743,7 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  xstate@5.32.4: {}
+  xstate@6.0.0-alpha.21: {}
 
   y18n@5.0.8: {}
 

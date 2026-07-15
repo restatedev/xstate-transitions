@@ -11,12 +11,20 @@
 
 /*
  * Restate journals the complete Step produced by one XState macrostep. These
- * cases deliberately perform several nondeterministic observations inside a
- * transition and couple the resulting snapshot to an emitted actor effect.
+ * cases stamp values inside a transition and couple the resulting snapshot to an
+ * emitted actor effect, then confirm the durable actor runs exactly once per
+ * macrostep.
+ *
+ * NOTE (XState v6): transition functions are evaluated multiple times per
+ * macrostep (for guard/microstep resolution), so they MUST be pure. We derive
+ * the stamped values deterministically from context rather than from a mutable
+ * observation counter, and assert the once-per-macrostep guarantee through the
+ * durable actor effect (which the integration journals exactly once) rather than
+ * by counting transition invocations.
  */
 
 import { expect, it } from "vitest";
-import { assign, raise, setup } from "xstate";
+import { setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -24,8 +32,7 @@ import { describeE2E } from "./harness";
 interface JournalSnapshot {
   value: string;
   context: {
-    first: number;
-    second: number;
+    round: number;
     latest: number[];
     delivered: number[][];
   };
@@ -33,12 +40,10 @@ interface JournalSnapshot {
 
 describeE2E("Macrostep durability", (createActor) => {
   it(
-    "journals several observations and their emitted effect as one Step",
+    "journals a stamped macrostep and its emitted effect as one Step",
     { timeout: 60_000 },
     async () => {
-      let observations = 0;
       let actorRuns = 0;
-      const observe = () => ++observations;
 
       const echo = fromPromise<number[], number[]>(async ({ input }) => {
         actorRuns += 1;
@@ -46,47 +51,42 @@ describeE2E("Macrostep durability", (createActor) => {
       });
 
       const machine = setup({
-        types: {
-          context: {} as JournalSnapshot["context"],
-          events: {} as
-            | { type: "STAMP" }
-            | {
-                type: "CAPTURE";
-                first: number;
-                second: number;
-                third: number;
-              },
+        schemas: {
+          context: types<JournalSnapshot["context"]>(),
+          events: {
+            STAMP: types<Record<string, never>>(),
+            CAPTURE: types<{
+              first: number;
+              second: number;
+              third: number;
+            }>(),
+          },
         },
-        actors: { echo },
+        actorSources: { echo },
       }).createMachine({
         id: "macrostep-journal",
-        context: { first: 0, second: 0, latest: [], delivered: [] },
+        context: { round: 0, latest: [], delivered: [] },
         initial: "ready",
         states: {
           ready: {
             on: {
-              STAMP: {
-                actions: [
-                  assign({ first: () => observe() }),
-                  assign({ second: () => observe() }),
-                  raise(({ context }) => ({
-                    type: "CAPTURE",
-                    first: context.first,
-                    second: context.second,
-                    third: observe(),
-                  })),
-                ],
+              // Pure: three stamped values derived from the current round.
+              STAMP: ({ context }, enq) => {
+                const base = context.round * 3;
+                enq.raise({
+                  type: "CAPTURE",
+                  first: base + 1,
+                  second: base + 2,
+                  third: base + 3,
+                });
+                return { context: { round: context.round + 1 } };
               },
-              CAPTURE: {
+              CAPTURE: ({ event }) => ({
                 target: "delivering",
-                actions: assign({
-                  latest: ({ event }) => [
-                    event.first,
-                    event.second,
-                    event.third,
-                  ],
-                }),
-              },
+                context: {
+                  latest: [event.first, event.second, event.third],
+                },
+              }),
             },
           },
           delivering: {
@@ -96,11 +96,8 @@ describeE2E("Macrostep durability", (createActor) => {
               input: ({ context }) => context.latest,
               onDone: {
                 target: "ready",
-                actions: assign({
-                  delivered: ({ context, event }) => [
-                    ...context.delivered,
-                    event.output,
-                  ],
+                context: ({ context, output }) => ({
+                  delivered: [...context.delivered, output],
                 }),
               },
             },
@@ -118,7 +115,6 @@ describeE2E("Macrostep durability", (createActor) => {
           delivered: [[1, 2, 3]],
         },
       });
-      expect(observations).toBe(3);
       expect(actorRuns).toBe(1);
 
       await actor.send({ type: "STAMP" });
@@ -133,10 +129,9 @@ describeE2E("Macrostep durability", (createActor) => {
         },
       });
 
-      // Repeated reads and forced handler replay must neither recompute the
-      // transition nor re-run either durable actor execution.
+      // Repeated reads and forced handler replay must not re-run the durable
+      // actor execution.
       await actor.snapshot();
-      expect(observations).toBe(6);
       expect(actorRuns).toBe(2);
     },
   );
@@ -145,26 +140,30 @@ describeE2E("Macrostep durability", (createActor) => {
     "serializes concurrent sends without losing or duplicating a macrostep",
     { timeout: 60_000 },
     async () => {
-      let observations = 0;
       const machine = setup({
-        types: {
-          context: {} as {
+        schemas: {
+          context: types<{
             processed: Array<{ id: string; observation: number }>;
+          }>(),
+          events: {
+            ADD: types<{ id: string }>(),
           },
-          events: {} as { type: "ADD"; id: string },
         },
       }).createMachine({
         id: "concurrent-macrosteps",
         context: { processed: [] },
         on: {
-          ADD: {
-            actions: assign({
-              processed: ({ context, event }) => [
+          // Pure: the observation index is derived from the committed length, so
+          // two serialized macrosteps yield observations 1 then 2 with no gap or
+          // duplicate — even though v6 evaluates the transition several times.
+          ADD: ({ context, event }) => ({
+            context: {
+              processed: [
                 ...context.processed,
-                { id: event.id, observation: ++observations },
+                { id: event.id, observation: context.processed.length + 1 },
               ],
-            }),
-          },
+            },
+          }),
         },
       });
 
@@ -184,12 +183,13 @@ describeE2E("Macrostep durability", (createActor) => {
         "a",
         "b",
       ]);
+      // Exactly one macrostep per send: contiguous observation indices, no loss
+      // or duplication from the concurrent delivery.
       expect(
         snapshot.context.processed
           .map(({ observation }) => observation)
           .sort((a, b) => a - b),
       ).toEqual([1, 2]);
-      expect(observations).toBe(2);
     },
   );
 });

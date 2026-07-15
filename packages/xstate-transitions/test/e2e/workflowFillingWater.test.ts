@@ -10,27 +10,24 @@
  */
 
 import { it } from "vitest";
-import { assign, createMachine, type SnapshotFrom } from "xstate";
+import { createMachine, type SnapshotFrom, types } from "xstate";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 // https://github.com/serverlessworkflow/specification/blob/main/examples/README.md#filling-a-glass-of-water
 export const workflow = createMachine({
   id: "fillglassofwater",
-  types: {} as {
-    events: {
-      type: "WaterAddedEvent";
-    };
-    context: {
+  schemas: {
+    context: types<{
       counts: {
         current: number;
         max: number;
       };
-    };
-    input: {
+    }>(),
+    input: types<{
       current: number;
       max: number;
-    };
+    }>(),
   },
   initial: "CheckIfFull",
   context: ({ input }) => ({
@@ -38,27 +35,22 @@ export const workflow = createMachine({
   }),
   states: {
     CheckIfFull: {
-      always: [
-        {
-          target: "AddWater",
-          guard: ({ context }) => context.counts.current < context.counts.max,
-        },
-        {
-          target: "GlassFull",
-        },
-      ],
+      always: ({ context }) =>
+        context.counts.current < context.counts.max
+          ? { target: "AddWater" }
+          : { target: "GlassFull" },
     },
     AddWater: {
       after: {
-        500: {
-          actions: assign({
-            counts: ({ context }) => ({
+        500: ({ context }) => ({
+          target: "CheckIfFull",
+          context: {
+            counts: {
               ...context.counts,
               current: context.counts.current + 1,
-            }),
-          }),
-          target: "CheckIfFull",
-        },
+            },
+          },
+        }),
       },
     },
     GlassFull: {

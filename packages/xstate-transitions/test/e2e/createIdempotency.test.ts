@@ -16,18 +16,18 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, createMachine } from "xstate";
+import { createMachine, types } from "xstate";
 import { describeE2E } from "./harness";
 
 const counter = createMachine({
-  types: {} as { context: { count: number } },
+  schemas: { context: types<{ count: number }>() },
   id: "recreate-counter",
   context: { count: 0 },
   initial: "idle",
   states: {
     idle: {
       on: {
-        inc: { actions: assign({ count: ({ context }) => context.count + 1 }) },
+        inc: ({ context }) => ({ context: { count: context.count + 1 } }),
       },
     },
   },
@@ -61,13 +61,14 @@ describeE2E("create() idempotency / re-create", (createActor) => {
     async () => {
       let observations = 0;
       const machine = createMachine({
-        types: {} as { context: { first: number; second: number } },
+        schemas: { context: types<{ first: number; second: number }>() },
         id: "recreate-observations",
         context: { first: 0, second: 0 },
-        entry: [
-          assign({ first: () => ++observations }),
-          assign({ second: () => ++observations }),
-        ],
+        entry: () => {
+          const first = ++observations;
+          const second = ++observations;
+          return { context: { first, second } };
+        },
       });
 
       using actor = await createActor<{

@@ -23,18 +23,14 @@
  */
 
 import { expect, it, vi } from "vitest";
-import { assign, cancel, sendTo, setup } from "xstate";
+import { setup } from "xstate";
 import { fromHandler } from "../../src";
 import { wait } from "./eventually.js";
 import { describeE2E } from "./harness";
 
-type MachineEvents = { type: "START_DELAYED" } | { type: "CANCEL" };
-type TaskEvents = { type: "START" };
-
 const machineFactory = (executor: () => Promise<void>) => {
   const taskMachine = setup({
-    types: { events: {} as TaskEvents },
-    actors: {
+    actorSources: {
       execute: fromHandler(async ({ ctx }) => {
         await ctx.run("Execute", async () => {
           await executor();
@@ -46,40 +42,42 @@ const machineFactory = (executor: () => Promise<void>) => {
     initial: "idle",
     states: {
       idle: { on: { START: { target: "running" } } },
-      running: { invoke: { onDone: "finished", src: "execute" } },
+      running: { invoke: { onDone: { target: "finished" }, src: "execute" } },
       finished: { type: "final" },
     },
   });
 
   return setup({
-    actors: { task: taskMachine },
-    types: { events: {} as MachineEvents },
-    actions: {
-      scheduleStart: sendTo(
-        "task",
-        { type: "START" },
-        {
-          delay: 1000,
-          id: "startDelay",
-        },
-      ),
-      cancelStart: cancel("startDelay"),
-    },
+    actorSources: { task: taskMachine },
   }).createMachine({
     id: "delayedStarter",
     initial: "ready",
-    context: { taskRef: null },
+    context: { taskRef: null as unknown },
     states: {
       ready: {
-        entry: assign({
-          taskRef: ({ spawn }) => spawn("task", { id: "task" }),
+        entry: (_, enq) => ({
+          context: {
+            taskRef: enq.spawn(taskMachine, { id: "task" }),
+          },
         }),
         on: {
-          START_DELAYED: { actions: "scheduleStart", target: "pending" },
+          START_DELAYED: ({ children }, enq) => {
+            enq.sendTo(
+              children.task,
+              { type: "START" },
+              { delay: 1000, id: "startDelay" },
+            );
+            return { target: "pending" };
+          },
         },
       },
       pending: {
-        on: { CANCEL: { actions: "cancelStart", target: "ready" } },
+        on: {
+          CANCEL: (_, enq) => {
+            enq.cancel("startDelay");
+            return { target: "ready" };
+          },
+        },
       },
     },
   });

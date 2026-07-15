@@ -10,7 +10,7 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, setup } from "xstate";
+import { createMachine, setup, types } from "xstate";
 import type { StandardSchema } from "../../src";
 import { describeE2E } from "./harness";
 
@@ -75,28 +75,28 @@ function numeric(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-const counter = setup({
-  types: {
-    input: {} as CounterInput,
-    context: {} as { count: number },
-    events: {} as CounterEvent,
+const counter = createMachine({
+  schemas: {
+    input: types<CounterInput>(),
+    context: types<{ count: number }>(),
+    events: {
+      ADD: types<{ amount: number }>(),
+      FINISH: types<{ bonus: number }>(),
+    },
   },
-}).createMachine({
   id: "contract-counter",
   context: ({ input }) => ({ count: input.initial }),
   initial: "active",
   states: {
     active: {
       on: {
-        ADD: {
-          actions: assign({
-            count: ({ context, event }) => context.count + event.amount,
-          }),
-        },
+        ADD: ({ context, event }) => ({
+          context: { count: context.count + event.amount },
+        }),
         FINISH: {
           target: "done",
-          actions: assign({
-            count: ({ context, event }) => context.count + event.bonus,
+          context: ({ context, event }) => ({
+            count: context.count + event.bonus,
           }),
         },
       },
@@ -110,10 +110,13 @@ describeE2E("Runtime machine contracts", (createActor) => {
     "rejects invalid create/send/waitFor input before changing state",
     { timeout: 30_000 },
     async () => {
-      using actor = await createActor<{
-        status: string;
-        context: { count: number };
-      }>({
+      using actor = await createActor<
+        {
+          status: string;
+          context: { count: number };
+        },
+        typeof counter
+      >({
         machine: counter,
         input: { initial: "2" },
         options: { contract: { input: inputSchema, event: eventSchema } },

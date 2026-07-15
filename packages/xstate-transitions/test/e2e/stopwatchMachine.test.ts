@@ -10,13 +10,13 @@
  */
 
 import { it } from "vitest";
-import { assign, fromCallback, setup } from "xstate";
+import { createCallbackLogic, setup } from "xstate";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 export const stopwatchMachine = setup({
-  actors: {
-    ticks: fromCallback(({ sendBack }) => {
+  actorSources: {
+    ticks: createCallbackLogic(({ sendBack }) => {
       const interval = setInterval(() => {
         sendBack({ type: "TICK" });
       }, 1000);
@@ -34,7 +34,7 @@ export const stopwatchMachine = setup({
   states: {
     stopped: {
       on: {
-        start: "running",
+        start: { target: "running" },
       },
     },
     running: {
@@ -42,21 +42,17 @@ export const stopwatchMachine = setup({
         src: "ticks",
       },
       on: {
-        TICK: {
-          actions: assign({
-            elapsed: ({ context }) => Number(context.elapsed) + 1,
-          }),
-        },
-        stop: "stopped",
+        TICK: ({ context }) => ({
+          context: { elapsed: Number(context.elapsed) + 1 },
+        }),
+        stop: { target: "stopped" },
       },
     },
   },
   on: {
     reset: {
-      actions: assign({
-        elapsed: 0,
-      }),
       target: ".stopped",
+      context: () => ({ elapsed: 0 }),
     },
   },
 });

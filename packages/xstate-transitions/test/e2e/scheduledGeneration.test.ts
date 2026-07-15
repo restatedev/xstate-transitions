@@ -16,33 +16,32 @@
  */
 
 import { expect, it } from "vitest";
-import { assign, sendTo, setup } from "xstate";
+import { setup, types } from "xstate";
 import { eventually, wait } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 const timerMachine = setup({
-  types: {
-    context: {} as { fired: string[] },
-    events: {} as
-      | { type: "SCHEDULE"; value: string; delay: number }
-      | { type: "FIRED"; value: string },
+  schemas: {
+    context: types<{ fired: string[] }>(),
+    events: {
+      SCHEDULE: types<{ value: string; delay: number }>(),
+      FIRED: types<{ value: string }>(),
+    },
   },
 }).createMachine({
   id: "scheduled-generation",
   context: { fired: [] },
   on: {
-    SCHEDULE: {
-      actions: sendTo(
-        ({ self }) => self,
-        ({ event }) => ({ type: "FIRED", value: event.value }),
-        { id: "slot", delay: ({ event }) => event.delay },
-      ),
+    SCHEDULE: ({ self, event }, enq) => {
+      enq.sendTo(
+        self,
+        { type: "FIRED", value: event.value },
+        { id: "slot", delay: event.delay },
+      );
     },
-    FIRED: {
-      actions: assign({
-        fired: ({ context, event }) => [...context.fired, event.value],
-      }),
-    },
+    FIRED: ({ context, event }) => ({
+      context: { fired: [...context.fired, event.value] },
+    }),
   },
 });
 

@@ -11,10 +11,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  createAsyncLogic,
   createMachine,
   initialTransition,
+  isBuiltInExecutableAction,
   setup,
-  fromPromise as xstateFromPromise,
 } from "xstate";
 import {
   createDoneActorEvent,
@@ -25,8 +26,8 @@ import {
 
 describe("resolveReferencedActor", () => {
   it("resolves a named actor via implementations", () => {
-    const work = xstateFromPromise(async () => 1);
-    const machine = setup({ actors: { work } }).createMachine({
+    const work = createAsyncLogic({ run: async () => 1 });
+    const machine = setup({ actorSources: { work } }).createMachine({
       id: "m",
       invoke: { src: "work" },
     });
@@ -38,10 +39,10 @@ describe("resolveReferencedActor", () => {
     const parent = createMachine({ id: "parent", invoke: { src: child } });
     const [, actions] = initialTransition(parent);
     const spawn = actions.find(
-      (a) => (a as { type: string }).type === "xstate.spawnChild",
-    ) as { params: { src: string } };
-    expect(spawn.params.src).toMatch(/^xstate\.invoke\./);
-    expect(resolveReferencedActor(parent, spawn.params.src)).toBe(child);
+      (a) => isBuiltInExecutableAction(a) && a.type === "@xstate.spawn",
+    ) as { src: string };
+    expect(spawn.src).toMatch(/^xstate\.invoke\./);
+    expect(resolveReferencedActor(parent, spawn.src)).toBe(child);
   });
 });
 

@@ -10,7 +10,7 @@
  */
 
 import { it } from "vitest";
-import { assign, createMachine, type SnapshotFrom } from "xstate";
+import { type SnapshotFrom, setup, types } from "xstate";
 import { fromPromise } from "../../src";
 import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
@@ -27,104 +27,100 @@ async function delay(ms: number, errorProbability: number = 0): Promise<void> {
   });
 }
 
-const vitalsWorkflow = createMachine(
-  {
-    id: "vitalscheck",
-    context: {
-      tirePressure: null,
-      oilPressure: null,
-      coolantLevel: null,
-      battery: null,
-    } as {
-      tirePressure: null | number;
-      oilPressure: null | number;
-      coolantLevel: null | number;
-      battery: null | number;
-    },
-    initial: "CheckVitals",
-    states: {
-      CheckVitals: {
-        invoke: [
-          {
-            src: "checkTirePressure",
-            onDone: {
-              actions: assign({
-                tirePressure: ({ event }) => event.output,
-              }),
-            },
+const vitalsWorkflow = setup({
+  schemas: {
+    context: types<{
+      tirePressure: null | { value: number };
+      oilPressure: null | { value: number };
+      coolantLevel: null | { value: number };
+      battery: null | { value: number };
+    }>(),
+  },
+  actorSources: {
+    checkTirePressure: fromPromise(async () => {
+      console.log("Starting checkTirePressure");
+      await delay(10);
+      console.log("Completed checkTirePressure");
+      return { value: 100 };
+    }),
+    checkOilPressure: fromPromise(async () => {
+      console.log("Starting checkOilPressure");
+      await delay(150);
+      console.log("Completed checkOilPressure");
+      return { value: 100 };
+    }),
+    checkCoolantLevel: fromPromise(async () => {
+      console.log("Starting checkCoolantLevel");
+      await delay(50);
+      console.log("Completed checkCoolantLevel");
+      return { value: 100 };
+    }),
+    checkBattery: fromPromise(async () => {
+      console.log("Starting checkBattery");
+      await delay(120);
+      console.log("Completed checkBattery");
+      return { value: 100 };
+    }),
+  },
+}).createMachine({
+  id: "vitalscheck",
+  context: {
+    tirePressure: null,
+    oilPressure: null,
+    coolantLevel: null,
+    battery: null,
+  },
+  initial: "CheckVitals",
+  states: {
+    CheckVitals: {
+      invoke: [
+        {
+          src: "checkTirePressure",
+          onDone: {
+            context: ({ output }) => ({
+              tirePressure: output,
+            }),
           },
-          {
-            src: "checkOilPressure",
-            onDone: {
-              actions: assign({
-                oilPressure: ({ event }) => event.output,
-              }),
-            },
-          },
-          {
-            src: "checkCoolantLevel",
-            onDone: {
-              actions: assign({
-                coolantLevel: ({ event }) => event.output,
-              }),
-            },
-          },
-          {
-            src: "checkBattery",
-            onDone: {
-              actions: assign({
-                battery: ({ event }) => event.output,
-              }),
-            },
-          },
-        ],
-        always: {
-          guard: ({ context }) => {
-            return !!(
-              context.tirePressure &&
-              context.oilPressure &&
-              context.coolantLevel &&
-              context.battery
-            );
-          },
-          target: "VitalsChecked",
         },
-      },
-      VitalsChecked: {
-        type: "final",
-      },
+        {
+          src: "checkOilPressure",
+          onDone: {
+            context: ({ output }) => ({
+              oilPressure: output,
+            }),
+          },
+        },
+        {
+          src: "checkCoolantLevel",
+          onDone: {
+            context: ({ output }) => ({
+              coolantLevel: output,
+            }),
+          },
+        },
+        {
+          src: "checkBattery",
+          onDone: {
+            context: ({ output }) => ({
+              battery: output,
+            }),
+          },
+        },
+      ],
+      always: ({ context }) =>
+        context.tirePressure &&
+        context.oilPressure &&
+        context.coolantLevel &&
+        context.battery
+          ? { target: "VitalsChecked" }
+          : undefined,
     },
-    output: ({ context }) => context,
-  },
-  {
-    actors: {
-      checkTirePressure: fromPromise(async () => {
-        console.log("Starting checkTirePressure");
-        await delay(10);
-        console.log("Completed checkTirePressure");
-        return { value: 100 };
-      }),
-      checkOilPressure: fromPromise(async () => {
-        console.log("Starting checkOilPressure");
-        await delay(150);
-        console.log("Completed checkOilPressure");
-        return { value: 100 };
-      }),
-      checkCoolantLevel: fromPromise(async () => {
-        console.log("Starting checkCoolantLevel");
-        await delay(50);
-        console.log("Completed checkCoolantLevel");
-        return { value: 100 };
-      }),
-      checkBattery: fromPromise(async () => {
-        console.log("Starting checkBattery");
-        await delay(120);
-        console.log("Completed checkBattery");
-        return { value: 100 };
-      }),
+    VitalsChecked: {
+      type: "final",
     },
   },
-);
+  output: ({ context }) => context,
+});
 
 describeE2E("A car vitals workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {

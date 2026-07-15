@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createMachine, fromPromise as xstateFromPromise } from "xstate";
+import { createAsyncLogic, createMachine } from "xstate";
 import type { RestateActor } from "../../src/restate/promise";
 import {
   fromHandler,
@@ -33,8 +33,10 @@ describe("isRestateActor", () => {
     expect(isRestateActor(fromHandler(async () => 1))).toBe(true);
   });
 
-  it("is false for vanilla xstate fromPromise and other values", () => {
-    expect(isRestateActor(xstateFromPromise(async () => 1))).toBe(false);
+  it("is false for a vanilla xstate actor and other values", () => {
+    expect(isRestateActor(createAsyncLogic({ run: async () => 1 }))).toBe(
+      false,
+    );
     expect(isRestateActor(createMachine({ id: "m" }))).toBe(false);
     // sentinel + kind but no callable config -> rejected.
     expect(isRestateActor({ sentinel: RESTATE_ACTOR, kind: "promise" })).toBe(
