@@ -201,6 +201,7 @@ describe("resumeStep() — events and routing", () => {
       event,
       isChild: false,
       knownChildIds: [],
+      knownPromiseIds: [],
     });
   };
 
@@ -237,6 +238,7 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "START" },
       isChild: false,
       knownChildIds: [],
+      knownPromiseIds: [],
     });
 
     expect(byKind(result.effects, "scheduleSend")).toEqual([
@@ -299,6 +301,7 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "PING" },
       isChild: false,
       knownChildIds: ["kid"],
+      knownPromiseIds: [],
     });
     expect(byKind(result.effects, "send")).toEqual([
       {
@@ -331,6 +334,7 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "LATER" },
       isChild: false,
       knownChildIds: ["kid"],
+      knownPromiseIds: [],
     });
     expect(byKind(result.effects, "scheduleSend")).toEqual([
       {
@@ -357,6 +361,7 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "GO" },
       isChild: true,
       knownChildIds: [],
+      knownPromiseIds: [],
     });
     expect(byKind(result.effects, "send")).toEqual([
       { kind: "send", target: { type: "parent" }, event: { type: "DONE" } },
@@ -375,6 +380,7 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "NOOP" },
       isChild: false,
       knownChildIds: ["kid"],
+      knownPromiseIds: [],
     });
     expect(byKind(resumed.effects, "startChild")).toHaveLength(0);
     expect(byKind(resumed.effects, "runPromise")).toHaveLength(0);
@@ -399,6 +405,7 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "CANCEL" },
       isChild: false,
       knownChildIds: ["kid"],
+      knownPromiseIds: [],
     });
 
     expect(byKind(stopped.effects, "stopChild")).toEqual([
@@ -424,6 +431,7 @@ describe("resumeStep() — events and routing", () => {
       event: { type: "REENTER" },
       isChild: false,
       knownChildIds: ["kid"],
+      knownPromiseIds: [],
     });
 
     expect(reentered.effects.slice(0, 2)).toEqual([
@@ -434,6 +442,37 @@ describe("resumeStep() — events and routing", () => {
         machineId: "child",
         input: { generation: 2 },
       },
+    ]);
+  });
+
+  it("stops then restarts a re-entered promise with the same actor id", () => {
+    const parent = setup({
+      actors: { work: fromPromise(async () => "done") },
+    }).createMachine({
+      id: "parent",
+      initial: "running",
+      states: {
+        running: {
+          invoke: { src: "work", id: "work" },
+          on: { REENTER: { target: "running", reenter: true } },
+        },
+      },
+    });
+    const created = initialStep(parent, { isChild: false });
+    const reentered = resumeStep(parent, {
+      stored: created.nextState,
+      event: { type: "REENTER" },
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: ["work"],
+    });
+
+    expect(reentered.effects.slice(0, 2)).toEqual([
+      { kind: "stopPromise", actorId: "work" },
+      expect.objectContaining({
+        kind: "runPromise",
+        params: expect.objectContaining({ id: "work" }),
+      }),
     ]);
   });
 });
@@ -467,6 +506,7 @@ describe("step — resolution semantics", () => {
       event: { type: "GO" },
       isChild: false,
       knownChildIds: [],
+      knownPromiseIds: [],
     });
     expect(result.nextState.value).toBe("c");
     expect(result.nextState.context).toEqual({ x: 5 });
@@ -486,6 +526,7 @@ describe("step — resolution semantics", () => {
       event: { type: "END" },
       isChild: false,
       knownChildIds: [],
+      knownPromiseIds: [],
     });
     expect(result.returned.status).toBe("done");
     expect(result.returned.output).toEqual({ ok: true });
@@ -505,6 +546,7 @@ describe("step — resolution semantics", () => {
         event: { type: "inc" },
         isChild: false,
         knownChildIds: [],
+        knownPromiseIds: [],
       });
     }
     expect(result.nextState.context).toEqual({ n: 3 });

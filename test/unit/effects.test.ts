@@ -23,6 +23,7 @@ interface ClientCall {
 function createHarness(options?: {
   parentKey?: string;
   invokeId?: string;
+  executionId?: string;
   finalStateTTL?: number;
 }) {
   const state = new Map<string, unknown>();
@@ -89,9 +90,12 @@ describe("executeEffects", () => {
       {
         key: "parent-key",
         method: "executeActor",
-        args: [{ params }],
+        args: [{ params, executionId: "uuid-1" }],
       },
     ]);
+    expect(harness.state.get("actorExecutions")).toEqual({
+      work: "uuid-1",
+    });
   });
 
   it("persists a child before routing later effects to it", async () => {
@@ -115,6 +119,7 @@ describe("executeEffects", () => {
     expect(harness.state.get("children")).toEqual({
       kid: { key: "parent-key::kid", machineId: "child-machine" },
     });
+    expect(harness.state.get("actorExecutions")).toEqual({ kid: "uuid-1" });
     expect(harness.clientCalls).toEqual([
       {
         key: "parent-key::kid",
@@ -124,13 +129,14 @@ describe("executeEffects", () => {
             machineId: "child-machine",
             parentKey: "parent-key",
             invokeId: "kid",
+            executionId: "uuid-1",
             input: { n: 1 },
           },
         ],
       },
       {
         key: "parent-key::kid",
-        method: "send",
+        method: "deliverEvent",
         args: [{ type: "PING" }],
       },
     ]);
@@ -141,14 +147,36 @@ describe("executeEffects", () => {
     harness.state.set("children", {
       kid: { key: "parent-key::kid", machineId: "child-machine" },
     });
+    harness.state.set("actorExecutions", { kid: "execution-1" });
 
     await executeEffects(harness.handler, [
       { kind: "stopChild", childId: "kid" },
     ]);
 
     expect(harness.state.get("children")).toEqual({});
+    expect(harness.state.get("actorExecutions")).toEqual({});
     expect(harness.clientCalls).toEqual([
       { key: "parent-key::kid", method: "cleanupState", args: [] },
+    ]);
+  });
+
+  it("replaces a stopped promise execution with a new generation", async () => {
+    const harness = createHarness();
+    harness.state.set("actorExecutions", { work: "old-execution" });
+    const params: SpawnParams = { id: "work", src: "work" };
+
+    await executeEffects(harness.handler, [
+      { kind: "stopPromise", actorId: "work" },
+      { kind: "runPromise", params },
+    ]);
+
+    expect(harness.state.get("actorExecutions")).toEqual({ work: "uuid-1" });
+    expect(harness.clientCalls).toEqual([
+      {
+        key: "parent-key",
+        method: "executeActor",
+        args: [{ params, executionId: "uuid-1" }],
+      },
     ]);
   });
 
@@ -274,7 +302,11 @@ describe("settleSubscriptions", () => {
 
 describe("terminal effects", () => {
   it("reports child completion exactly once", async () => {
-    const harness = createHarness({ parentKey: "root", invokeId: "kid" });
+    const harness = createHarness({
+      parentKey: "root",
+      invokeId: "kid",
+      executionId: "execution-1",
+    });
     const snapshot = activeSnapshot({ status: "done", output: { ok: true } });
 
     await reportTerminal(harness.handler, snapshot);
@@ -284,14 +316,24 @@ describe("terminal effects", () => {
     expect(harness.clientCalls).toEqual([
       {
         key: "root",
-        method: "send",
-        args: [{ type: "xstate.done.actor.kid", output: { ok: true } }],
+        method: "actorDone",
+        args: [
+          {
+            actorId: "kid",
+            executionId: "execution-1",
+            output: { ok: true },
+          },
+        ],
       },
     ]);
   });
 
   it("normalizes a child error before reporting it", async () => {
-    const harness = createHarness({ parentKey: "root", invokeId: "kid" });
+    const harness = createHarness({
+      parentKey: "root",
+      invokeId: "kid",
+      executionId: "execution-1",
+    });
 
     await reportTerminal(
       harness.handler,
@@ -300,10 +342,11 @@ describe("terminal effects", () => {
 
     expect(harness.clientCalls[0]).toMatchObject({
       key: "root",
-      method: "send",
+      method: "actorError",
       args: [
         {
-          type: "xstate.error.actor.kid",
+          actorId: "kid",
+          executionId: "execution-1",
           error: { name: "TypeError", message: "boom" },
         },
       ],

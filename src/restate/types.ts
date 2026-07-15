@@ -11,21 +11,77 @@ import type {
   ObjectOptions,
 } from "@restatedev/restate-sdk";
 import type { Condition, ReturnedSnapshot, SpawnParams } from "../xstate/types";
+import type { NormalizedError } from "../xstate/actors";
 
-export type MachineObjectOptions = {
-  /**
-   * If set, an instance is disposed this many milliseconds after it reaches a
-   * final state. After disposal, all handlers reject with a 410 TerminalError.
-   */
-  finalStateTTL?: number;
-} & ObjectOptions;
-
-/** Payload of the internal `_execute` handler (runs an invoked/spawned actor). */
-export interface ExecuteRequest {
-  params: SpawnParams;
+/** One validation issue in the library-neutral Standard Schema format. */
+export interface StandardSchemaIssue {
+  readonly message: string;
+  readonly path?:
+    ReadonlyArray<PropertyKey | { readonly key: PropertyKey }> | undefined;
 }
 
-/** Payload of the internal `_scheduled` handler (delivers a delayed event). */
+/** The result shape defined by Standard Schema. */
+export type StandardSchemaResult<T> =
+  | { readonly value: T; readonly issues?: undefined }
+  | { readonly issues: ReadonlyArray<StandardSchemaIssue> };
+
+/**
+ * Structural Standard Schema contract. Compliant validation libraries satisfy
+ * this without an adapter or a runtime dependency from this package.
+ */
+export interface StandardSchema<T> {
+  readonly "~standard": {
+    readonly version: 1;
+    readonly vendor: string;
+    readonly types?:
+      { readonly input: unknown; readonly output: T } | undefined;
+    readonly validate: (
+      value: unknown,
+      options?: {
+        readonly libraryOptions?: Record<string, unknown> | undefined;
+      },
+    ) => StandardSchemaResult<T> | Promise<StandardSchemaResult<T>>;
+  };
+}
+
+/** Runtime contracts for values accepted through the public object ingress. */
+export interface MachineContract<M extends AnyStateMachine = AnyStateMachine> {
+  input?: StandardSchema<InputFrom<M>>;
+  event?: StandardSchema<EventFrom<M>>;
+}
+
+export type MachineObjectOptions<M extends AnyStateMachine = AnyStateMachine> =
+  {
+    /**
+     * If set, an instance is disposed this many milliseconds after it reaches a
+     * final state. After disposal, all handlers reject with a 410 TerminalError.
+     */
+    finalStateTTL?: number;
+    /** Optional runtime validation for public create/send ingress. */
+    contract?: MachineContract<M>;
+  } & ObjectOptions;
+
+/** Payload of the internal `executeActor` handler. */
+export interface ExecuteRequest {
+  params: SpawnParams;
+  executionId: string;
+}
+
+/** A successful actor execution delivered through an ingress-private handler. */
+export interface ActorDoneRequest {
+  actorId: string;
+  executionId: string;
+  output?: unknown;
+}
+
+/** A failed actor execution delivered through an ingress-private handler. */
+export interface ActorErrorRequest {
+  actorId: string;
+  executionId: string;
+  error: NormalizedError;
+}
+
+/** Payload of the internal `deliverScheduled` handler. */
 export interface ScheduledEvent {
   sendId: string;
   uuid: string;
@@ -38,11 +94,12 @@ export interface ScheduledDelivery {
   event: AnyEventObject;
 }
 
-/** Payload of the internal `_init` handler (initializes a child instance). */
+/** Payload of the internal `initChild` handler. */
 export interface InitRequest {
   machineId: string;
   parentKey: string;
   invokeId: string;
+  executionId: string;
   input?: unknown;
 }
 
@@ -80,6 +137,18 @@ export type MachineVirtualObject<M extends AnyStateMachine> = {
     context: ObjectContext,
     request: SubscribeRequest,
   ) => Promise<void>;
+  deliverEvent: (
+    context: ObjectContext,
+    event: AnyEventObject,
+  ) => Promise<void>;
+  actorDone: (
+    context: ObjectContext,
+    request: ActorDoneRequest,
+  ) => Promise<void>;
+  actorError: (
+    context: ObjectContext,
+    request: ActorErrorRequest,
+  ) => Promise<void>;
   executeActor: (
     context: ObjectSharedContext,
     request: ExecuteRequest,
@@ -106,5 +175,7 @@ export interface HandlerContext {
   parentKey?: string;
   /** Set only for a child instance: the invoke/spawn id it runs under. */
   invokeId?: string;
+  /** Unique generation of this child invocation. */
+  executionId?: string;
   finalStateTTL?: number;
 }

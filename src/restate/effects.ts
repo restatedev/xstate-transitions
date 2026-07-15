@@ -1,5 +1,6 @@
 import * as restate from "@restatedev/restate-sdk";
 import type { ObjectSharedContext } from "@restatedev/restate-sdk";
+import type { AnyEventObject } from "xstate";
 import { evaluateCondition } from "../xstate/conditions";
 import { normalizeError } from "../xstate/actors";
 import {
@@ -7,6 +8,8 @@ import {
   setScheduled,
   getChildren,
   setChildren,
+  getActorExecutions,
+  setActorExecutions,
   getSubscriptions,
   setSubscriptions,
   wasReported,
@@ -18,6 +21,8 @@ import type {
   HandlerContext,
   ChildRecord,
   ExecuteRequest,
+  ActorDoneRequest,
+  ActorErrorRequest,
   ScheduledEvent,
   InitRequest,
   SubscribeRequest,
@@ -30,9 +35,11 @@ type SendOpts = ReturnType<typeof restate.rpc.sendOpts>;
 /** One-way (fire-and-forget) client for a machine object. */
 interface MachineSendClient {
   executeActor(request: ExecuteRequest): void;
+  actorDone(request: ActorDoneRequest): void;
+  actorError(request: ActorErrorRequest): void;
   initChild(request: InitRequest): void;
   deliverScheduled(request: ScheduledEvent, opts?: SendOpts): void;
-  send(event: unknown, opts?: SendOpts): void;
+  deliverEvent(event: AnyEventObject, opts?: SendOpts): void;
   cleanupState(opts?: SendOpts): void;
 }
 
@@ -85,23 +92,35 @@ export async function executeEffects(
   const { ctx, self } = handler;
   const scheduled = await getScheduled(ctx);
   const children = await getChildren(ctx);
+  const actorExecutions = await getActorExecutions(ctx);
   let scheduledChanged = false;
   let childrenChanged = false;
+  let actorExecutionsChanged = false;
 
   for (const effect of effects) {
     switch (effect.kind) {
       case "runPromise": {
-        sendClient(ctx, self, ctx.key).executeActor({ params: effect.params });
+        const executionId = ctx.rand.uuidv4();
+        actorExecutions[effect.params.id] = executionId;
+        actorExecutionsChanged = true;
+        sendClient(ctx, self, ctx.key).executeActor({
+          params: effect.params,
+          executionId,
+        });
         break;
       }
       case "startChild": {
         const key = `${ctx.key}::${effect.childId}`;
+        const executionId = ctx.rand.uuidv4();
         children[effect.childId] = { key, machineId: effect.machineId };
         childrenChanged = true;
+        actorExecutions[effect.childId] = executionId;
+        actorExecutionsChanged = true;
         sendClient(ctx, self, key).initChild({
           machineId: effect.machineId,
           parentKey: ctx.key,
           invokeId: effect.childId,
+          executionId,
           input: effect.input,
         });
         break;
@@ -111,12 +130,23 @@ export async function executeEffects(
         if (!child) break;
         delete children[effect.childId];
         childrenChanged = true;
+        if (actorExecutions[effect.childId]) {
+          delete actorExecutions[effect.childId];
+          actorExecutionsChanged = true;
+        }
         sendClient(ctx, self, child.key).cleanupState();
+        break;
+      }
+      case "stopPromise": {
+        if (actorExecutions[effect.actorId]) {
+          delete actorExecutions[effect.actorId];
+          actorExecutionsChanged = true;
+        }
         break;
       }
       case "send": {
         const key = resolveTarget(handler, effect.target, children);
-        if (key) sendClient(ctx, self, key).send(effect.event);
+        if (key) sendClient(ctx, self, key).deliverEvent(effect.event);
         break;
       }
       case "scheduleSend": {
@@ -150,6 +180,7 @@ export async function executeEffects(
 
   if (scheduledChanged) setScheduled(ctx, scheduled);
   if (childrenChanged) setChildren(ctx, children);
+  if (actorExecutionsChanged) setActorExecutions(ctx, actorExecutions);
 }
 
 function assertNever(value: never): never {
@@ -187,21 +218,23 @@ export async function reportTerminal(
   handler: HandlerContext,
   returned: ReturnedSnapshot,
 ): Promise<void> {
-  const { ctx, self, parentKey, invokeId } = handler;
-  if (parentKey == null || invokeId == null) return;
+  const { ctx, self, parentKey, invokeId, executionId } = handler;
+  if (parentKey == null || invokeId == null || executionId == null) return;
   if (returned.status !== "done" && returned.status !== "error") return;
   if (await wasReported(ctx)) return;
   markReported(ctx);
 
   const parent = sendClient(ctx, self, parentKey);
   if (returned.status === "done") {
-    parent.send({
-      type: `xstate.done.actor.${invokeId}`,
+    parent.actorDone({
+      actorId: invokeId,
+      executionId,
       output: returned.output,
     });
   } else {
-    parent.send({
-      type: `xstate.error.actor.${invokeId}`,
+    parent.actorError({
+      actorId: invokeId,
+      executionId,
       error: normalizeError(returned.error),
     });
   }

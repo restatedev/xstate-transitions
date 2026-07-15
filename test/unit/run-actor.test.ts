@@ -38,16 +38,19 @@ describe("runActor", () => {
       invoke: { id: "work", src: "work", input: { value: 21 } },
     });
 
-    const event = await runActor(machine, invokedParams(machine), fakeContext);
+    const outcome = await runActor(
+      machine,
+      invokedParams(machine),
+      fakeContext,
+    );
 
     expect(creator).toHaveBeenCalledWith({
       input: { value: 21 },
       ctx: fakeContext,
     });
-    expect(event).toEqual({
-      type: "xstate.done.actor.work",
+    expect(outcome).toEqual({
+      status: "done",
       output: 42,
-      actorId: "work",
     });
   });
 
@@ -66,9 +69,8 @@ describe("runActor", () => {
     await expect(
       runActor(machine, invokedParams(machine), fakeContext),
     ).resolves.toMatchObject({
-      type: "xstate.error.actor.work",
+      status: "error",
       error: { message: "invalid input" },
-      actorId: "work",
     });
   });
 
@@ -105,9 +107,8 @@ describe("runActor", () => {
     await expect(
       runActor(machine, invokedParams(machine), fakeContext),
     ).resolves.toEqual({
-      type: "xstate.error.actor.work",
+      status: "error",
       error: { name: "TypeError", message: "boom" },
-      actorId: "work",
     });
   });
 });

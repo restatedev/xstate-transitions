@@ -8,6 +8,12 @@ import type {
 /** Sentinel marking a Restate-aware promise actor (see restate/promise.ts). */
 export const RESTATE_PROMISE_ACTOR = "restate.promise.actor";
 
+/** Plain error data safe to persist and send between Restate handlers. */
+export interface NormalizedError {
+  name: string;
+  message: string;
+}
+
 /** A Restate-aware promise actor: an xstate logic carrying our creator. */
 export interface RestatePromiseActor {
   sentinel: typeof RESTATE_PROMISE_ACTOR;
@@ -74,10 +80,7 @@ export function createDoneActorEvent(
 }
 
 /** Normalize any thrown value into a serializable, guard-friendly shape. */
-export function normalizeError(error: unknown): {
-  name: string;
-  message: string;
-} {
+export function normalizeError(error: unknown): NormalizedError {
   return error instanceof Error
     ? { name: error.name, message: error.message }
     : { name: "Error", message: String(error) };
@@ -90,6 +93,18 @@ export function createErrorActorEvent(
   return {
     type: `xstate.error.actor.${invokeId}`,
     error: normalizeError(error),
+    actorId: invokeId,
+  };
+}
+
+/** Build an actor error event from error data that is already normalized. */
+export function createNormalizedErrorActorEvent(
+  invokeId: string,
+  error: NormalizedError,
+): ErrorActorEvent {
+  return {
+    type: `xstate.error.actor.${invokeId}`,
+    error,
     actorId: invokeId,
   };
 }

@@ -4,7 +4,9 @@ export { fromPromise } from "./restate/promise";
 export type { RestatePromiseCreator } from "./restate/promise";
 export type {
   MachineObjectOptions,
+  MachineContract,
   MachineVirtualObject,
+  StandardSchema,
   WaitForRequest,
   SubscribeRequest,
 } from "./restate/types";

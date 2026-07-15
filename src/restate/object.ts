@@ -1,9 +1,18 @@
-import type { AnyStateMachine, InputFrom, EventFrom } from "xstate";
+import type {
+  AnyEventObject,
+  AnyStateMachine,
+  InputFrom,
+  EventFrom,
+} from "xstate";
 import * as restate from "@restatedev/restate-sdk";
 import { buildRegistry } from "../xstate/registry";
 import { fromStored, toReturnedSnapshot } from "../xstate/snapshot";
 import { evaluateCondition, isValidCondition } from "../xstate/conditions";
 import { initialStep, resumeStep } from "../xstate/interpret";
+import {
+  createDoneActorEvent,
+  createNormalizedErrorActorEvent,
+} from "../xstate/actors";
 import type { ReturnedSnapshot, Step, StoredState } from "../xstate/types";
 import {
   selfDef,
@@ -15,13 +24,17 @@ import {
   maybeScheduleCleanup,
 } from "./effects";
 import { runActor } from "./run-actor";
+import { parseContract, publicEventProblem } from "./contracts";
 import {
   getState,
   isDisposed,
   getMachineId,
   getParentKey,
   getInvokeId,
+  getExecutionId,
   getChildren,
+  getActorExecutions,
+  setActorExecutions,
   getScheduled,
   setScheduled,
   setState,
@@ -37,6 +50,8 @@ import type {
   MachineObjectOptions,
   MachineVirtualObject,
   ExecuteRequest,
+  ActorDoneRequest,
+  ActorErrorRequest,
   ScheduledEvent,
   InitRequest,
   SubscribeRequest,
@@ -64,14 +79,15 @@ import type {
  * - `waitFor({ condition, timeout?, event? })` — awakeable-backed long-poll,
  *   optionally sending an event first.
  *
- * Internal handlers (ingress-private): `initChild`, `deliverScheduled`,
- * `executeActor`, `cleanupState`.
+ * Internal handlers (ingress-private): `deliverEvent`, `actorDone`,
+ * `actorError`, `initChild`, `deliverScheduled`, `executeActor`,
+ * `cleanupState`.
  *
  * @param name - The virtual object (service) name to register under.
  * @param machine - The root state machine; child machines it invokes/spawns run
  *   as their own instances of this same object.
- * @param options - Restate object options, plus `finalStateTTL` to dispose an
- *   instance a given number of ms after it reaches a final state.
+ * @param options - Restate object options, runtime input/event contracts, plus
+ *   `finalStateTTL` to dispose an instance after it reaches a final state.
  * @returns A Restate `VirtualObjectDefinition` to bind to an endpoint.
  */
 export function createMachineObject<
@@ -80,11 +96,11 @@ export function createMachineObject<
 >(
   name: P,
   machine: M,
-  options?: MachineObjectOptions,
+  options?: MachineObjectOptions<M>,
 ): restate.VirtualObjectDefinition<P, MachineVirtualObject<M>> {
   const registry = buildRegistry(machine);
   const self = selfDef(name);
-  const { finalStateTTL, ...objectOptions } = options ?? {};
+  const { finalStateTTL, contract, ...objectOptions } = options ?? {};
   validateFinalStateTTL(finalStateTTL);
 
   function getMachine(id: string | null): AnyStateMachine {
@@ -102,11 +118,13 @@ export function createMachineObject<
   ): Promise<HandlerContext> {
     const parentKey = await getParentKey(context);
     const invokeId = await getInvokeId(context);
+    const executionId = await getExecutionId(context);
     return {
       ctx: context,
       self,
       ...(parentKey === null ? {} : { parentKey }),
       ...(invokeId === null ? {} : { invokeId }),
+      ...(executionId === null ? {} : { executionId }),
       ...(finalStateTTL === undefined ? {} : { finalStateTTL }),
     };
   }
@@ -133,36 +151,97 @@ export function createMachineObject<
 
   async function applyEvent(
     context: restate.ObjectContext,
-    event: EventFrom<M>,
+    event: AnyEventObject,
   ): Promise<void> {
     const stored = await getState(context);
     if (stored == null) return;
     const handler = await buildHandlerContext(context);
     const instanceMachine = getMachine(await getMachineId(context));
-    const knownChildIds = Object.keys(await getChildren(context));
+    const children = await getChildren(context);
+    const actorExecutions = await getActorExecutions(context);
+    const knownChildIds = Object.keys(children);
+    const knownPromiseIds = Object.keys(actorExecutions).filter(
+      (actorId) => children[actorId] === undefined,
+    );
     const result = await computeStep(context, "event", () =>
       resumeStep(instanceMachine, {
         stored,
         event,
         isChild: handler.parentKey != null,
         knownChildIds,
+        knownPromiseIds,
       }),
     );
     await commit(handler, result);
   }
 
+  async function consumeActorExecution(
+    context: restate.ObjectContext,
+    actorId: string,
+    executionId: string,
+  ): Promise<boolean> {
+    const actorExecutions = await getActorExecutions(context);
+    if (actorExecutions[actorId] !== executionId) return false;
+    delete actorExecutions[actorId];
+    setActorExecutions(context, actorExecutions);
+    return true;
+  }
+
+  const createHandler = async (
+    context: restate.ObjectContext,
+    input: InputFrom<M>,
+  ): Promise<void> => {
+    clearRuntimeState(context);
+    clearIdentity(context);
+    const handler = await buildHandlerContext(context);
+    const result = await computeStep(context, "create", () =>
+      initialStep(machine, { input, isChild: false }),
+    );
+    await commit(handler, result);
+  };
+
+  const sendHandler = async (
+    context: restate.ObjectContext,
+    event: EventFrom<M>,
+  ): Promise<void> => {
+    validatePublicEvent(event);
+    await validateNotDisposed(context);
+    await getRequiredState(context);
+    await applyEvent(context, event);
+  };
+
+  const create = contract?.input
+    ? restate.handlers.object.exclusive(
+        { input: restate.serde.schema(contract.input) },
+        createHandler,
+      )
+    : createHandler;
+
+  const send = contract?.event
+    ? restate.handlers.object.exclusive(
+        { input: restate.serde.schema(contract.event) },
+        sendHandler,
+      )
+    : sendHandler;
+
+  function parsePublicEvent(event: EventFrom<M>): EventFrom<M> {
+    const result = contract?.event
+      ? parseContract(contract.event, event)
+      : { ok: true as const, value: event };
+    if (!result.ok) {
+      throw new restate.TerminalError(result.message, {
+        errorCode: result.kind === "invalid" ? 400 : 500,
+      });
+    }
+    const parsed = result.value;
+    validatePublicEvent(parsed);
+    return parsed;
+  }
+
   return restate.object({
     name,
     handlers: {
-      create: async (context: restate.ObjectContext, input: InputFrom<M>) => {
-        clearRuntimeState(context);
-        clearIdentity(context);
-        const handler = await buildHandlerContext(context);
-        const result = await computeStep(context, "create", () =>
-          initialStep(machine, { input, isChild: false }),
-        );
-        await commit(handler, result);
-      },
+      create,
 
       initChild: restate.handlers.object.exclusive(
         { ingressPrivate: true },
@@ -180,11 +259,52 @@ export function createMachineObject<
         },
       ),
 
-      send: async (context: restate.ObjectContext, event: EventFrom<M>) => {
-        await validateNotDisposed(context);
-        await getRequiredState(context);
-        await applyEvent(context, event);
-      },
+      send,
+
+      deliverEvent: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (context: restate.ObjectContext, event: AnyEventObject) => {
+          await applyEvent(context, event);
+        },
+      ),
+
+      actorDone: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (context: restate.ObjectContext, request: ActorDoneRequest) => {
+          if (
+            !(await consumeActorExecution(
+              context,
+              request.actorId,
+              request.executionId,
+            ))
+          ) {
+            return;
+          }
+          await applyEvent(
+            context,
+            createDoneActorEvent(request.actorId, request.output),
+          );
+        },
+      ),
+
+      actorError: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (context: restate.ObjectContext, request: ActorErrorRequest) => {
+          if (
+            !(await consumeActorExecution(
+              context,
+              request.actorId,
+              request.executionId,
+            ))
+          ) {
+            return;
+          }
+          await applyEvent(
+            context,
+            createNormalizedErrorActorEvent(request.actorId, request.error),
+          );
+        },
+      ),
 
       deliverScheduled: restate.handlers.object.exclusive(
         { ingressPrivate: true },
@@ -197,9 +317,11 @@ export function createMachineObject<
           setScheduled(context, scheduled);
 
           if (entry.targetKey === context.key) {
-            await applyEvent(context, entry.event as EventFrom<M>);
+            await applyEvent(context, entry.event);
           } else {
-            sendClient(context, self, entry.targetKey).send(entry.event);
+            sendClient(context, self, entry.targetKey).deliverEvent(
+              entry.event,
+            );
           }
         },
       ),
@@ -211,12 +333,25 @@ export function createMachineObject<
           request: ExecuteRequest,
         ) => {
           const instanceMachine = getMachine(await getMachineId(context));
-          const event = await runActor(
+          const outcome = await runActor(
             instanceMachine,
             request.params,
             context,
           );
-          sendClient(context, self, context.key).send(event);
+          const target = sendClient(context, self, context.key);
+          if (outcome.status === "done") {
+            target.actorDone({
+              actorId: request.params.id,
+              executionId: request.executionId,
+              output: outcome.output,
+            });
+          } else {
+            target.actorError({
+              actorId: request.params.id,
+              executionId: request.executionId,
+              error: outcome.error,
+            });
+          }
         },
       ),
 
@@ -272,6 +407,11 @@ export function createMachineObject<
           await getRequiredState(context);
           validateCondition(request.condition);
 
+          const event =
+            request.event === undefined
+              ? undefined
+              : parsePublicEvent(request.event);
+
           const { id, promise } = context.awakeable<ReturnedSnapshot>();
 
           await client(context, self, context.key).subscribe({
@@ -279,8 +419,8 @@ export function createMachineObject<
             awakeableId: id,
           });
 
-          if (request.event) {
-            sendClient(context, self, context.key).send(request.event);
+          if (event !== undefined) {
+            sendClient(context, self, context.key).deliverEvent(event);
           }
 
           try {
@@ -333,6 +473,14 @@ async function getRequiredState(
     "No state machine found for this workflow ID. Call 'create' first.",
     { errorCode: 404 },
   );
+}
+
+/** Reject malformed or reserved events arriving through the public handler. */
+function validatePublicEvent(event: unknown): asserts event is AnyEventObject {
+  const problem = publicEventProblem(event);
+  if (problem !== undefined) {
+    throw new restate.TerminalError(problem, { errorCode: 400 });
+  }
 }
 
 /** Reject (400) an unsupported wait condition. */

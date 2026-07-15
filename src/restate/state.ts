@@ -22,6 +22,8 @@ const KEYS = {
   scheduled: "scheduled",
   /** Started child machines, keyed by child id. */
   children: "children",
+  /** Active promise/child generation, keyed by actor id. */
+  actorExecutions: "actorExecutions",
   /** `true` once a child has reported its terminal state to its parent. */
   reported: "reported",
   /** For a child instance: which registered machine it runs. */
@@ -30,6 +32,8 @@ const KEYS = {
   parentKey: "parentKey",
   /** For a child instance: the invoke/spawn id it was started under. */
   invokeId: "invokeId",
+  /** For a child instance: the unique generation of this invocation. */
+  executionId: "executionId",
 } as const;
 
 // --- reads -----------------------------------------------------------------
@@ -60,6 +64,12 @@ export function getInvokeId(ctx: ObjectSharedContext): Promise<string | null> {
   return ctx.get<string>(KEYS.invokeId);
 }
 
+export function getExecutionId(
+  ctx: ObjectSharedContext,
+): Promise<string | null> {
+  return ctx.get<string>(KEYS.executionId);
+}
+
 export async function getScheduled(
   ctx: ObjectSharedContext,
 ): Promise<Record<string, ScheduledDelivery>> {
@@ -72,6 +82,12 @@ export async function getChildren(
   ctx: ObjectSharedContext,
 ): Promise<Record<string, ChildRecord>> {
   return (await ctx.get<Record<string, ChildRecord>>(KEYS.children)) ?? {};
+}
+
+export async function getActorExecutions(
+  ctx: ObjectSharedContext,
+): Promise<Record<string, string>> {
+  return (await ctx.get<Record<string, string>>(KEYS.actorExecutions)) ?? {};
 }
 
 export async function getSubscriptions(
@@ -102,6 +118,13 @@ export function setChildren(
   ctx.set(KEYS.children, children);
 }
 
+export function setActorExecutions(
+  ctx: ObjectContext,
+  executions: Record<string, string>,
+): void {
+  ctx.set(KEYS.actorExecutions, executions);
+}
+
 export function setSubscriptions(
   ctx: ObjectContext,
   subscriptions: Record<string, Subscription>,
@@ -120,11 +143,17 @@ export function markDisposedAndClear(ctx: ObjectContext): void {
 
 export function setIdentity(
   ctx: ObjectContext,
-  identity: { machineId: string; parentKey: string; invokeId: string },
+  identity: {
+    machineId: string;
+    parentKey: string;
+    invokeId: string;
+    executionId: string;
+  },
 ): void {
   ctx.set(KEYS.machineId, identity.machineId);
   ctx.set(KEYS.parentKey, identity.parentKey);
   ctx.set(KEYS.invokeId, identity.invokeId);
+  ctx.set(KEYS.executionId, identity.executionId);
 }
 
 /**
@@ -137,6 +166,7 @@ export function clearRuntimeState(ctx: ObjectContext): void {
   ctx.clear(KEYS.subscriptions);
   ctx.clear(KEYS.scheduled);
   ctx.clear(KEYS.children);
+  ctx.clear(KEYS.actorExecutions);
   ctx.clear(KEYS.reported);
 }
 
@@ -144,4 +174,5 @@ export function clearIdentity(ctx: ObjectContext): void {
   ctx.clear(KEYS.machineId);
   ctx.clear(KEYS.parentKey);
   ctx.clear(KEYS.invokeId);
+  ctx.clear(KEYS.executionId);
 }

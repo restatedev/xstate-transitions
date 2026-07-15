@@ -16,6 +16,7 @@ implementation, durability model, and testing strategy.
   - [The mental model](#the-mental-model)
   - [Quick start](#quick-start)
   - [Calling a machine](#calling-a-machine)
+  - [Runtime ingress contracts](#runtime-ingress-contracts)
   - [Modeling durable workflows](#modeling-durable-workflows)
   - [Promise actors and external effects](#promise-actors-and-external-effects)
   - [Delays and cancellation](#delays-and-cancellation)
@@ -79,20 +80,27 @@ Define a fully typed machine and use the integration's Restate-aware
 
 ```ts
 import * as restate from "@restatedev/restate-sdk";
+import * as z from "zod";
 import { assign, setup } from "xstate";
 import { createMachineObject, fromPromise } from "./src";
 
-interface OrderInput {
-  sku: string;
-  quantity: number;
-}
+const OrderInputSchema = z.object({
+  sku: z.string().min(1),
+  quantity: z.number().int().positive(),
+});
+
+const OrderEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("SUBMIT") }),
+  z.object({ type: z.literal("CANCEL") }),
+]);
+
+type OrderInput = z.infer<typeof OrderInputSchema>;
+type OrderEvent = z.infer<typeof OrderEventSchema>;
 
 interface OrderContext extends OrderInput {
   reservationId?: string;
   failure?: { name: string; message: string };
 }
-
-type OrderEvent = { type: "SUBMIT" } | { type: "CANCEL" };
 
 interface ReserveInput {
   sku: string;
@@ -176,6 +184,10 @@ export const orderMachine = setup({
 });
 
 const orders = createMachineObject("orders", orderMachine, {
+  contract: {
+    input: OrderInputSchema,
+    event: OrderEventSchema,
+  },
   journalRetention: { days: 7 },
   finalStateTTL: 30 * 24 * 60 * 60 * 1_000,
 });
@@ -195,6 +207,10 @@ import { fromPromise } from "xstate";
 
 Prefer the integration's version whenever the actor performs I/O or needs
 Restate's durable primitives.
+
+The quick-start contract uses Zod 4 as an application dependency. The
+integration itself does not depend on Zod; it consumes its Standard Schema
+interface structurally.
 
 To run the included example locally:
 
@@ -245,6 +261,62 @@ surface, while `EventFrom` and `InputFrom` flow from the XState machine into
 `send` completes after the event's macrostep has been computed, persisted, and
 its resulting effects have been dispatched. Invoked promise actors and child
 machines continue asynchronously and report their results through later events.
+
+## Runtime ingress contracts
+
+TypeScript types disappear at runtime, while Restate ingress, generated clients,
+and other services can all supply untrusted JSON. Define the machine's public
+input and event union as runtime schemas, derive the TypeScript types from those
+schemas, and attach them as the machine object's `contract`:
+
+```ts
+const Input = z.object({ accountId: z.string().uuid() });
+const Event = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("DEPOSIT"), amount: z.number().positive() }),
+  z.object({ type: z.literal("CLOSE") }),
+]);
+
+type Input = z.infer<typeof Input>;
+type Event = z.infer<typeof Event>;
+
+const machine = setup({
+  types: {
+    input: {} as Input,
+    events: {} as Event,
+  },
+}).createMachine({
+  // ...
+});
+
+const accounts = createMachineObject("accounts", machine, {
+  contract: { input: Input, event: Event },
+});
+```
+
+The integration accepts the library-neutral
+[Standard Schema](https://standardschema.dev/) interface rather than importing
+a validation library. Zod 4 works directly; other Standard Schema-compatible
+libraries do as well. The schema output type must match XState's `InputFrom<M>`
+or `EventFrom<M>`, so a mismatched contract fails type-checking.
+
+Contracts are optional for gradual adoption, but they are recommended for every
+object exposed through ingress. When present:
+
+- `create` validates and parses machine input before reset or initialization;
+- `send` validates and parses the public event before state mutation;
+- the optional `waitFor.event` is parsed with the same event contract before an
+  awakeable is registered; and
+- validation failures are terminal status 400 errors.
+
+Schemas may transform input, and the machine receives the parsed output. Keep
+validation synchronous: Restate handler deserialization is synchronous. Also
+reserve the `xstate.*` event namespace for the integration; the public `send`
+handler rejects it even when no contract is configured.
+
+TypeBox produces JSON Schema and has its own compiled validation API. If the
+TypeBox version or adapter in your application exposes Standard Schema, pass
+that adapter here. Do not pass a bare JSON Schema as if it were a validator:
+schema metadata alone does not prove that the value was checked at runtime.
 
 ## Modeling durable workflows
 
@@ -324,11 +396,11 @@ accepts a request but before its result is durably recorded.
 
 Its error behavior is deliberate:
 
-| Actor outcome          | Integration behavior                                               |
-| ---------------------- | ------------------------------------------------------------------ |
-| Returns a value        | Sends `xstate.done.actor.<id>` with that output                    |
-| Throws `TerminalError` | Sends `xstate.error.actor.<id>` and enters `onError` if configured |
-| Throws another error   | Rethrows from the Restate handler so Restate can retry             |
+| Actor outcome          | Integration behavior                                                |
+| ---------------------- | ------------------------------------------------------------------- |
+| Returns a value        | Calls private `actorDone`; the machine receives `onDone`            |
+| Throws `TerminalError` | Calls private `actorError`; the machine enters `onError` if modeled |
+| Throws another error   | Rethrows from the Restate handler so Restate can retry              |
 
 Use a `TerminalError` for a permanent business or input failure that retrying
 cannot fix. Throw an ordinary error for a transient operational failure.
@@ -346,8 +418,8 @@ computation. They are not the preferred boundary for durable external I/O.
 
 Multiple invokes emitted by the same transition are dispatched through a
 shared internal Restate handler and may run concurrently. Each completion is
-sent back as a separate event. The virtual object's exclusive `send` handler
-serializes those result events and applies them one at a time.
+sent back through the exclusive `actorDone` or `actorError` handler. Object
+exclusivity serializes those results and applies them one at a time.
 
 Do not depend on completion order unless the state machine models that ordering
 explicitly.
@@ -489,10 +561,12 @@ replaces the machine snapshot with a new initial snapshot using the new input.
 It is not a read-or-create no-op.
 
 Use reset only after coordinating or quiescing the existing execution. Reset
-does not revoke promise actors or delayed calls already in flight, and it does
-not send cleanup calls to children whose routing records it clears. A late
-result from the previous execution can therefore reach the newly initialized
-machine if the old work is still active.
+does not cancel the underlying promise computation or send cleanup calls to
+children whose routing records it clears. Actor completion reports and delayed
+deliveries from the old run are generation/token guarded and become no-ops.
+Application events that were already routed by an old child are not
+generation-scoped, however, and external side effects already performed cannot
+be undone.
 
 Calling `send`, `snapshot`, or `waitFor` before `create` fails with status 404.
 
@@ -519,24 +593,25 @@ The value must be finite and non-negative. `0` requests immediate cleanup.
 This table describes the behavior implemented and covered by tests in this
 repository, not every feature available in XState itself.
 
-| Pattern                                            | Status                 | Notes                                                  |
-| -------------------------------------------------- | ---------------------- | ------------------------------------------------------ |
-| Compound and parallel states                       | Supported              | One full macrostep is persisted per event              |
-| Guards, `assign`, `always`, immediate `raise`      | Supported              | Resolved during pure transition computation            |
-| Final output and tags                              | Supported              | Exposed in returned snapshots                          |
-| Shallow and deep history                           | Supported              | State-node references are serialized as IDs            |
-| Promise `invoke` and `spawn`                       | Supported              | Prefer the Restate-aware `fromPromise` for I/O         |
-| Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                     |
-| Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance       |
-| `sendTo`, `forwardTo`, `sendParent`                | Supported targets only | Self, known child, and parent routing                  |
-| `after`, delayed `raise`, delayed `sendTo`         | Supported              | Implemented with Restate delayed calls                 |
-| `cancel(id)`                                       | Supported              | Uses a durable delivery token                          |
-| `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`               |
-| Repeated `create`                                  | Reset with caveat      | Does not revoke in-flight work from the prior run      |
-| Arbitrary executable XState actions                | **Not supported**      | Unknown/custom action effects are not executed         |
-| Callback actors (`fromCallback`)                   | **Not supported**      | No long-lived in-process actor exists                  |
-| Observable actors and other long-lived actor logic | Not guaranteed         | Only tested actor patterns should be relied upon       |
-| Arbitrary actor-system addressing                  | **Not supported**      | Routing is limited to self, parent, and known children |
+| Pattern                                            | Status                 | Notes                                                   |
+| -------------------------------------------------- | ---------------------- | ------------------------------------------------------- |
+| Compound and parallel states                       | Supported              | One full macrostep is persisted per event               |
+| Guards, `assign`, `always`, immediate `raise`      | Supported              | Resolved during pure transition computation             |
+| Final output and tags                              | Supported              | Exposed in returned snapshots                           |
+| Shallow and deep history                           | Supported              | State-node references are serialized as IDs             |
+| Promise `invoke` and `spawn`                       | Supported              | Prefer the Restate-aware `fromPromise` for I/O          |
+| Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                      |
+| Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance        |
+| `sendTo`, `forwardTo`, `sendParent`                | Supported targets only | Self, known child, and parent routing                   |
+| `after`, delayed `raise`, delayed `sendTo`         | Supported              | Implemented with Restate delayed calls                  |
+| `cancel(id)`                                       | Supported              | Uses a durable delivery token                           |
+| `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`                |
+| Standard Schema input/event contracts              | Integration feature    | Recommended for every public ingress boundary           |
+| Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone |
+| Arbitrary executable XState actions                | **Not supported**      | Unknown/custom action effects are not executed          |
+| Callback actors (`fromCallback`)                   | **Not supported**      | No long-lived in-process actor exists                   |
+| Observable actors and other long-lived actor logic | Not guaranteed         | Only tested actor patterns should be relied upon        |
+| Arbitrary actor-system addressing                  | **Not supported**      | Routing is limited to self, parent, and known children  |
 
 The custom-action limitation is especially important. A declaration such as
 `actions: "sendEmail"` may type-check in XState, but this integration does not
@@ -700,11 +775,12 @@ flowchart TD
     Effects --> Child["Child object instance"]
     Effects --> Message["Self / parent / child send"]
     Step --> Waiters["Settle subscriptions"]
-    Actor --> Result["Done/error event"]
-    Timer --> Result
-    Child --> Result
-    Message --> Result
-    Result --> Handler
+    Actor --> ActorResult["actorDone / actorError"]
+    Child --> ActorResult
+    Timer --> DomainEvent["deliverEvent"]
+    Message --> DomainEvent
+    ActorResult --> Handler
+    DomainEvent --> Handler
 ```
 
 The dependency direction is intentional:
@@ -730,6 +806,7 @@ resumeStep(machine, {
   event,
   isChild,
   knownChildIds,
+  knownPromiseIds,
 }): Step
 ```
 
@@ -758,6 +835,7 @@ type Effect =
       input: unknown;
     }
   | { kind: "stopChild"; childId: string }
+  | { kind: "stopPromise"; actorId: string }
   | { kind: "send"; target: Target; event: AnyEventObject }
   | {
       kind: "scheduleSend";
@@ -773,10 +851,11 @@ This is the central separation of pure logic from effects. Adding a new effect
 requires an explicit type, interpreter mapping, Restate executor branch, and
 tests at both boundaries.
 
-XState drops live child references when a snapshot is reconstructed. Before a
-transition, the core reinjects inert stubs for known persisted child IDs. This
-lets `sendTo` and `forwardTo` resolve actor-ref targets without trying to revive
-an in-memory child actor.
+XState drops live actor references when a snapshot is reconstructed. Before a
+transition, the core reinjects inert stubs for known persisted child and promise
+actor IDs. This prevents active actors from being restarted and lets `sendTo`
+and `forwardTo` resolve child targets without trying to revive an in-memory
+actor.
 
 ## Handler and commit lifecycle
 
@@ -824,6 +903,18 @@ Object exclusivity serializes state mutation. Promise actors execute through a
 shared ingress-private handler with lazy state enabled, allowing independent
 invokes to overlap without giving them mutation access.
 
+The public and internal protocols are intentionally separate:
+
+- `send` accepts only public machine events, applies the configured contract,
+  and rejects the reserved `xstate.*` namespace;
+- `deliverEvent` carries domain events produced by supported machine messaging
+  effects without exposing them through public ingress; and
+- `actorDone` and `actorError` carry the two finite actor result variants,
+  including the execution ID needed for stale-result rejection.
+
+Only `actorDone` and `actorError` construct XState lifecycle events. No generic
+handler accepts a union of public domain events and actor-system result events.
+
 ## Persisted representation
 
 Raw XState snapshots are not persisted. They contain methods, actor data, sets,
@@ -851,10 +942,11 @@ internal history and live XState structures.
 
 ## Effect execution
 
-`executeEffects` loads the scheduled-delivery and child maps once, walks the
-effect array in order, performs Restate operations, and writes changed maps
-back. The exhaustive `switch` ends in an `assertNever`, so TypeScript makes an
-unhandled new effect kind a compile-time error.
+`executeEffects` loads the scheduled-delivery, child-routing, and active actor
+generation maps once, walks the effect array in order, performs Restate
+operations, and writes changed maps back. The exhaustive `switch` ends in an
+`assertNever`, so TypeScript makes an unhandled new effect kind a compile-time
+error.
 
 Effects are deliberately descriptions, not closures. This keeps them
 serializable and makes unit tests simple: a test can assert an exact effect
@@ -885,15 +977,26 @@ ingress-private `executeActor` handler. `runActor` resolves named actor sources
 from machine implementations and then branches:
 
 - Restate-aware actor: call its creator with `{ input, ctx }`; convert only
-  `TerminalError` to an XState error event; rethrow other errors for retry.
+  `TerminalError` to an error outcome; rethrow other errors for retry.
 - Vanilla actor: start it with XState `createActor`/`toPromise`; convert any
-  rejection to a serializable XState error event.
+  rejection to a serializable error outcome.
 
 Both paths normalize errors to plain `{ name, message }` data before that error
 is persisted or crosses an object boundary.
 
-The actor handler sends its done/error result back to the same keyed object. It
-does not mutate the parent snapshot directly.
+Every promise start gets a durable random execution ID. The shared actor handler
+returns its result to the same keyed object through one of two explicit,
+ingress-private protocols:
+
+```text
+actorDone({ actorId, executionId, output })
+actorError({ actorId, executionId, error })
+```
+
+The exclusive result handler consumes the ID only when it matches the current
+generation, then constructs the corresponding XState lifecycle event inside the
+integration. A result from a stopped, reset, or re-entered actor is stale and is
+ignored. Public callers cannot inject these lifecycle events through `send`.
 
 ## Child-machine execution
 
@@ -908,17 +1011,22 @@ It indexes them by machine ID and rejects ambiguous duplicate IDs.
 Starting a machine child:
 
 1. derives `${parentKey}::${childId}`;
-2. persists `{ key, machineId }` in the parent's child map;
-3. sends `initChild` to the derived object key; and
-4. records the child's `parentKey` and `invokeId` with its own state.
+2. generates and records a new execution ID for the child ID;
+3. records `{ key, machineId }` in the parent's child map;
+4. sends `initChild` with that execution ID to the derived object key; and
+5. records the child's `parentKey`, `invokeId`, and execution ID with its own
+   state.
 
-Persisting the child record before later effects is important: a subsequent
-effect in the same step can already route a message to that child.
+Updating the effect executor's working child map before later effects is
+important: a subsequent effect in the same step can already route a message to
+that child. The changed routing and generation maps are written to Restate state
+before the handler completes.
 
-On a terminal child snapshot, `reportTerminal` sends either
-`xstate.done.actor.<invokeId>` or `xstate.error.actor.<invokeId>` to the parent.
-A durable `reported` flag prevents duplicate terminal reports. Stopping a child
-removes its parent record and sends the child an internal cleanup call.
+On a terminal child snapshot, `reportTerminal` calls the parent's `actorDone` or
+`actorError` handler with the child's execution ID. A durable `reported` flag
+prevents duplicate terminal reports; the parent generation check rejects a late
+report from a replaced child. Stopping a child removes its parent record and
+sends the child an internal cleanup call.
 
 ## Delayed delivery and cancellation
 
@@ -946,10 +1054,10 @@ queue-removal primitive.
 `waitFor` is a shared handler so it can remain suspended without blocking the
 object's exclusive event handlers. It:
 
-1. validates the object and condition;
+1. validates the object, condition, and optional public event contract;
 2. creates a Restate awakeable;
 3. calls the exclusive `subscribe` handler to evaluate or store it;
-4. optionally sends the request event; and
+4. optionally routes the parsed request event through `deliverEvent`; and
 5. awaits the result, optionally with a timeout.
 
 `subscribe` first checks the current snapshot. It immediately resolves a
@@ -1016,6 +1124,7 @@ For an XState upgrade:
 | [`src/xstate/registry.ts`](src/xstate/registry.ts)     | Reachable child-machine discovery and ID validation              |
 | [`src/xstate/conditions.ts`](src/xstate/conditions.ts) | Pure waiter-condition validation and evaluation                  |
 | [`src/xstate/actors.ts`](src/xstate/actors.ts)         | Actor-source resolution, sentinel detection, error/event helpers |
+| [`src/restate/contracts.ts`](src/restate/contracts.ts) | Pure runtime-contract parsing and public-event classification    |
 | [`src/restate/object.ts`](src/restate/object.ts)       | Virtual-object definition and handler lifecycle                  |
 | [`src/restate/effects.ts`](src/restate/effects.ts)     | Abstract-effect execution, waiter settlement, terminal reporting |
 | [`src/restate/state.ts`](src/restate/state.ts)         | Named accessors for all durable KV state                         |
@@ -1052,6 +1161,9 @@ High-value invariants to preserve include:
 - deep history survives persistence;
 - two unnamed delayed sends cannot collide;
 - cancellation makes stale deliveries harmless;
+- invalid runtime contracts fail before state mutation;
+- public callers cannot forge `xstate.*` lifecycle events;
+- stale promise/child generations cannot complete a replacement actor;
 - child start/stop/re-entry does not retain old state;
 - a child terminal event is reported once;
 - concurrent invokes cannot overwrite each other's context updates;
@@ -1069,7 +1181,9 @@ High-value invariants to preserve include:
 | `createMachineObject`   | Function | Convert a root XState machine into a Restate object definition |
 | `fromPromise`           | Function | Define a Restate-aware XState promise actor                    |
 | `RestatePromiseCreator` | Type     | Creator signature receiving `{ input, ctx }`                   |
-| `MachineObjectOptions`  | Type     | Restate object options plus `finalStateTTL`                    |
+| `MachineObjectOptions`  | Type     | Restate options plus runtime contract and `finalStateTTL`      |
+| `MachineContract`       | Type     | Optional Standard Schema input/event contracts                 |
+| `StandardSchema`        | Type     | Library-neutral runtime-schema interface                       |
 | `MachineVirtualObject`  | Type     | Typed handler surface for SDK clients                          |
 | `WaitForRequest`        | Type     | Condition, optional timeout, and optional typed event          |
 | `SubscribeRequest`      | Type     | Condition plus an existing awakeable ID                        |
@@ -1087,31 +1201,35 @@ High-value invariants to preserve include:
 | `waitFor`   | `WaitForRequest<M>` | `ReturnedSnapshot` | Shared long-poll; event is sent after subscribing |
 | `subscribe` | `SubscribeRequest`  | `void`             | Low-level awakeable registration                  |
 
-The object also contains ingress-private handlers named `executeActor`,
-`deliverScheduled`, `initChild`, and `cleanupState`. They are implementation
-details and should not be called by application clients.
+The object also contains ingress-private handlers named `deliverEvent`,
+`actorDone`, `actorError`, `executeActor`, `deliverScheduled`, `initChild`, and
+`cleanupState`. `deliverEvent` carries internally routed domain events;
+`actorDone` and `actorError` are the finite actor lifecycle protocols. They are
+implementation details and should not be called by application clients.
 
 # Appendix B: Durable state keys
 
 All KV access is centralized in [`src/restate/state.ts`](src/restate/state.ts).
 
-| Key             | Value                           | Purpose                                                       |
-| --------------- | ------------------------------- | ------------------------------------------------------------- |
-| `state`         | `StoredState`                   | Current serialized XState snapshot                            |
-| `disposed`      | `boolean`                       | Marks an instance cleaned after final-state TTL or child stop |
-| `subscriptions` | condition → awakeable IDs       | Pending `waitFor`/`subscribe` registrations                   |
-| `scheduled`     | send ID → delivery record       | Cancellation and stale-delivery guard                         |
-| `children`      | child ID → `{ key, machineId }` | Durable child routing and lifecycle                           |
-| `reported`      | `boolean`                       | Prevents duplicate terminal reports from a child              |
-| `machineId`     | `string`                        | Selects child machine logic from the registry                 |
-| `parentKey`     | `string`                        | Routes `sendParent` and terminal reports                      |
-| `invokeId`      | `string`                        | Builds the parent's XState actor result event                 |
+| Key               | Value                           | Purpose                                                       |
+| ----------------- | ------------------------------- | ------------------------------------------------------------- |
+| `state`           | `StoredState`                   | Current serialized XState snapshot                            |
+| `disposed`        | `boolean`                       | Marks an instance cleaned after final-state TTL or child stop |
+| `subscriptions`   | condition → awakeable IDs       | Pending `waitFor`/`subscribe` registrations                   |
+| `scheduled`       | send ID → delivery record       | Cancellation and stale-delivery guard                         |
+| `children`        | child ID → `{ key, machineId }` | Durable child routing and lifecycle                           |
+| `actorExecutions` | actor ID → execution ID         | Rejects stale promise and child completion reports            |
+| `reported`        | `boolean`                       | Prevents duplicate terminal reports from a child              |
+| `machineId`       | `string`                        | Selects child machine logic from the registry                 |
+| `parentKey`       | `string`                        | Routes `sendParent` and terminal reports                      |
+| `invokeId`        | `string`                        | Builds the parent's XState actor result event                 |
+| `executionId`     | `string`                        | Identifies the current generation of a child instance         |
 
 # Appendix C: Error reference
 
 | Status/code | Meaning                                                | Typical fix                                                           |
 | ----------- | ------------------------------------------------------ | --------------------------------------------------------------------- |
-| 400         | Invalid wait condition                                 | Use `done` or `hasTag:<tag>`                                          |
+| 400         | Invalid contract value, event, or wait condition       | Fix the payload; use `done` or `hasTag:<tag>`                         |
 | 404         | No machine at this object key                          | Call `create` before `send`, `snapshot`, or `waitFor`                 |
 | 410         | Instance was disposed                                  | Use a new key or explicitly call `create` to start fresh              |
 | 412         | Wait condition became impossible                       | Handle completed/error outcome instead of retrying the same condition |

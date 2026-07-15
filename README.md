@@ -41,11 +41,19 @@ supports:
   (`cancel(id)`), via guarded Restate delayed self-sends.
 - **`waitFor` / `subscribe`** on `done` / `hasTag:*` conditions, backed by
   Restate awakeables, plus tag exposure on snapshots.
+- **Runtime ingress contracts** for machine input and public events through
+  library-neutral [Standard Schema](https://standardschema.dev/) validators
+  (including Zod 4), applied consistently to `create`, `send`, and the optional
+  event carried by `waitFor`.
 - **`finalStateTTL`** disposal of completed instances.
 - **Cross-machine messaging**: `invoke` / `spawn` of a child machine runs it as
   its own virtual object (keyed `${parent}::${childId}`), with `sendTo` /
   `forwardTo` / `sendParent` routed as Restate sends between objects, and invoke
   `onDone` / `onError` reported back to the parent.
+- **Private actor protocols**: actor completion and failure use distinct
+  ingress-private handlers with execution-generation tokens, so callers cannot
+  forge XState lifecycle events and late results from superseded actors are
+  harmless.
 
 ### Current limitation
 

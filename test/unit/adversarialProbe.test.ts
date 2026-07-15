@@ -19,6 +19,7 @@ import {
 import { buildRegistry } from "../../src/xstate/registry";
 import { fromStored, toStored } from "../../src/xstate/snapshot";
 import { runActor } from "../../src/restate/run-actor";
+import { createNormalizedErrorActorEvent } from "../../src/xstate/actors";
 
 const jsonRoundTrip = <T>(value: T): T =>
   JSON.parse(JSON.stringify(value)) as T;
@@ -226,10 +227,15 @@ describe("temporary adversarial probes", () => {
     const spawn = actions.find(
       (candidate) => candidate.type === "xstate.spawnChild",
     ) as any;
-    const errorEvent = await runActor(machine, spawn.params, {} as any);
-    expect(errorEvent).toMatchObject({
+    const outcome = await runActor(machine, spawn.params, {} as any);
+    expect(outcome).toMatchObject({
       error: { name: "Error", message: "MATCH_ME" },
     });
+    if (outcome.status !== "error") throw new Error("Expected actor failure");
+    const errorEvent = createNormalizedErrorActorEvent(
+      spawn.params.id,
+      outcome.error,
+    );
     const [next] = transition(machine, snapshot, errorEvent as never);
     expect(next).toMatchObject({ status: "done", value: "matched" });
   });

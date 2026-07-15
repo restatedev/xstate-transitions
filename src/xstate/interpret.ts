@@ -56,19 +56,29 @@ export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
  *
  * @param machine - The state machine this instance runs.
  * @param input - The stored state, the event to apply, whether this instance is
- *   a child, and the ids of children already started (so they are not restarted).
+ *   a child, and the ids of child/promise actors already started (so they are
+ *   not restarted).
  * @returns The next persisted state, a caller-facing snapshot, and the effects.
  */
 export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
   const snapshot = fromStored(machine, input.stored);
-  injectStubChildren(snapshot, input.knownChildIds);
+  injectStubChildren(snapshot, [
+    ...input.knownChildIds,
+    ...input.knownPromiseIds,
+  ]);
   const [next, actions] = runTransition(
     machine,
     snapshot,
     input.event,
     input.isChild,
   );
-  return finish(machine, next, actions, input.knownChildIds);
+  return finish(
+    machine,
+    next,
+    actions,
+    input.knownChildIds,
+    input.knownPromiseIds,
+  );
 }
 
 // ===========================================================================
@@ -108,11 +118,18 @@ function finish(
   snapshot: AnyMachineSnapshot,
   actions: Action[],
   knownChildIds: readonly string[],
+  knownPromiseIds: readonly string[] = [],
 ): Step {
   return {
     nextState: toStored(snapshot),
     returned: toReturnedSnapshot(snapshot),
-    effects: interpretActions(machine, snapshot, actions, knownChildIds),
+    effects: interpretActions(
+      machine,
+      snapshot,
+      actions,
+      knownChildIds,
+      knownPromiseIds,
+    ),
   };
 }
 
@@ -133,28 +150,37 @@ function interpretActions(
   snapshot: AnyMachineSnapshot,
   actions: Action[],
   knownChildIds: readonly string[],
+  knownPromiseIds: readonly string[],
 ): Effect[] {
   const activeChildren = new Set(knownChildIds);
-  const effects = stopChildEffects(actions, activeChildren);
-  effects.push(...startActorEffects(snapshot, actions, activeChildren));
+  const activePromises = new Set(knownPromiseIds);
+  const effects = stopActorEffects(actions, activeChildren, activePromises);
+  effects.push(
+    ...startActorEffects(snapshot, actions, activeChildren, activePromises),
+  );
   for (const action of actions) {
-    const effect = toEffect(machine, action, activeChildren);
+    const effect = toEffect(machine, action, activeChildren, activePromises);
     if (effect) effects.push(effect);
   }
   return effects;
 }
 
-/** Stop persisted machine children before considering starts in the next snapshot. */
-function stopChildEffects(
+/** Stop persisted actors before considering starts in the next snapshot. */
+function stopActorEffects(
   actions: Action[],
   activeChildren: Set<string>,
+  activePromises: Set<string>,
 ): Effect[] {
   const effects: Effect[] = [];
   for (const action of actions) {
     if (action.type !== "xstate.stopChild") continue;
     const childId = refId(action.params);
-    if (childId === undefined || !activeChildren.delete(childId)) continue;
-    effects.push({ kind: "stopChild", childId });
+    if (childId === undefined) continue;
+    if (activeChildren.delete(childId)) {
+      effects.push({ kind: "stopChild", childId });
+    } else if (activePromises.delete(childId)) {
+      effects.push({ kind: "stopPromise", actorId: childId });
+    }
   }
   return effects;
 }
@@ -164,6 +190,7 @@ function startActorEffects(
   snapshot: AnyMachineSnapshot,
   actions: Action[],
   activeChildren: Set<string>,
+  activePromises: Set<string>,
 ): Effect[] {
   const spawnParams = new Map<string, SpawnParams>();
   for (const action of actions) {
@@ -205,6 +232,7 @@ function startActorEffects(
           input,
         },
       });
+      activePromises.add(childId);
     }
   }
   return effects;
@@ -214,15 +242,18 @@ function startActorEffects(
 function toEffect(
   machine: AnyStateMachine,
   action: Action,
-  activeChildren: ReadonlySet<string>,
+  activeChildren: Set<string>,
+  activePromises: Set<string>,
 ): Effect | undefined {
   switch (action.type) {
     case "xstate.spawnChild": {
       const params = action.params as SpawnParams;
       // machine children are started separately; only promise/plain actors here
-      return activeChildren.has(params.id)
-        ? undefined
-        : { kind: "runPromise", params };
+      if (activeChildren.has(params.id) || activePromises.has(params.id)) {
+        return undefined;
+      }
+      activePromises.add(params.id);
+      return { kind: "runPromise", params };
     }
     case "xstate.raise": {
       const { event, id, delay } = action.params as RaiseParams;

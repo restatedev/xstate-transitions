@@ -69,6 +69,7 @@ export type Effect =
   | { kind: "runPromise"; params: SpawnParams }
   | { kind: "startChild"; childId: string; machineId: string; input: unknown }
   | { kind: "stopChild"; childId: string }
+  | { kind: "stopPromise"; actorId: string }
   | { kind: "send"; target: Target; event: AnyEventObject }
   | {
       kind: "scheduleSend";
@@ -102,4 +103,6 @@ export interface ResumeInput {
   isChild: boolean;
   /** Ids of children already started (to avoid re-starting them). */
   knownChildIds: readonly string[];
+  /** Ids of promise actors still running out-of-band. */
+  knownPromiseIds: readonly string[];
 }
