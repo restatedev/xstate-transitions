@@ -31,7 +31,7 @@ pure-transition v6 style; the rest lean into `setup({ schemas })` typing.
 | `orders.ts`   | `orders`   | Schemas-first typing, `fromHandler`/`ctx.run`, `onError`, tags/`waitFor`. |
 | `example.ts`  | `payment`  | Payment confirmation: invoke → `always` branch → success/insufficient.    |
 
-`src/index.ts` binds them all with `restate.endpoint().bind(...).listen()`.
+`src/index.ts` serves them all with `restate.serve({ services: [...] })`.
 
 ## Try it
 

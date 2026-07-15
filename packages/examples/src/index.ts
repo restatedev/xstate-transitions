@@ -11,7 +11,7 @@
 
 /*
  * The example service. Every example machine is a durable Restate virtual
- * object; this entrypoint binds them all to one endpoint. Each object is
+ * object; this entrypoint serves them all from one endpoint. Each object is
  * reachable at /{name}/{key}/{handler} — e.g. /orders/order-123/create.
  *
  * Run it with `pnpm dev`, then register http://localhost:9080 in the Restate UI.
@@ -24,11 +24,6 @@ import { auction } from "./auction";
 import { bookLending } from "./library";
 import { orders } from "./orders";
 
-restate
-  .endpoint()
-  .bind(payment)
-  .bind(greeting)
-  .bind(auction)
-  .bind(bookLending)
-  .bind(orders)
-  .listen();
+restate.serve({
+  services: [payment, greeting, auction, bookLending, orders],
+});
