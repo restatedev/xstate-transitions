@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /*
  * Copyright (c) 2023-2024 - Restate Software, Inc., Restate GmbH
  *
@@ -11,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import { setup, assign, type SnapshotFrom, fromPromise } from "xstate";
 import { eventually } from "./eventually.js";
@@ -109,9 +107,9 @@ export const workflow = setup({
   },
 });
 
-describe("An event based workflow", () => {
+describeE2E("An event based workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-    using actor = await createRestateTestActor<SnapshotFrom<typeof workflow>>({
+    using actor = await createActor<SnapshotFrom<typeof workflow>>({
       machine: workflow,
       input: {
         person: { name: "Jenny" },
@@ -129,7 +127,6 @@ describe("An event based workflow", () => {
 
     await eventually(
       async () =>
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         (await actor.snapshot()).context.appointmentInfo.appointmentInfo
           ?.appointmentId,
     ).toStrictEqual("1234");

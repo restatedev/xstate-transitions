@@ -1,0 +1,338 @@
+import type { AnyStateMachine, InputFrom, EventFrom } from "xstate";
+import * as restate from "@restatedev/restate-sdk";
+import { buildRegistry } from "../xstate/registry";
+import { fromStored, toReturnedSnapshot } from "../xstate/snapshot";
+import { evaluateCondition, isValidCondition } from "../xstate/conditions";
+import { initialStep, resumeStep } from "../xstate/interpret";
+import type { ReturnedSnapshot, Step } from "../xstate/types";
+import {
+  selfDef,
+  sendClient,
+  client,
+  executeEffects,
+  settleSubscriptions,
+  reportTerminal,
+  maybeScheduleCleanup,
+} from "./effects";
+import { runActor } from "./run-actor";
+import {
+  getState,
+  isDisposed,
+  getMachineId,
+  getParentKey,
+  getInvokeId,
+  getChildren,
+  getScheduled,
+  setScheduled,
+  setState,
+  setIdentity,
+  markDisposedAndClear,
+  clearRuntimeState,
+  clearIdentity,
+  getSubscriptions,
+  setSubscriptions,
+} from "./state";
+import type {
+  HandlerContext,
+  MachineObjectOptions,
+  MachineVirtualObject,
+  ExecuteRequest,
+  ScheduledEvent,
+  InitRequest,
+  SubscribeRequest,
+  WaitForRequest,
+} from "./types";
+
+// ===========================================================================
+// Entrypoint
+// ===========================================================================
+
+/**
+ * Turn an XState machine into a Restate virtual object.
+ *
+ * Each object key is one durable machine instance whose state is the persisted
+ * snapshot. Handlers drive the machine through the pure {@link initialStep} /
+ * {@link resumeStep} functions (journaled via `ctx.run` for replay determinism)
+ * and execute the resulting effects against Restate.
+ *
+ * Public handlers:
+ * - `create(input)` — start a new instance from its initial transition.
+ * - `send(event)` — apply an event; returns once the macrostep is persisted.
+ * - `snapshot()` — read the current snapshot (with tags).
+ * - `subscribe({ condition, awakeableId })` — resolve an awakeable when a
+ *   `done` | `hasTag:*` condition is met.
+ * - `waitFor({ condition, timeout?, event? })` — awakeable-backed long-poll,
+ *   optionally sending an event first.
+ *
+ * Internal handlers (ingress-private): `initChild`, `deliverScheduled`,
+ * `executeActor`, `cleanupState`.
+ *
+ * @param name - The virtual object (service) name to register under.
+ * @param machine - The root state machine; child machines it invokes/spawns run
+ *   as their own instances of this same object.
+ * @param options - Restate object options, plus `finalStateTTL` to dispose an
+ *   instance a given number of ms after it reaches a final state.
+ * @returns A Restate `VirtualObjectDefinition` to bind to an endpoint.
+ */
+export function createMachineObject<
+  P extends string,
+  M extends AnyStateMachine,
+>(
+  name: P,
+  machine: M,
+  options?: MachineObjectOptions,
+): restate.VirtualObjectDefinition<P, MachineVirtualObject<M>> {
+  const registry = buildRegistry(machine);
+  const self = selfDef(name);
+  const finalStateTTL = options?.finalStateTTL;
+
+  function getMachine(id: string | null): AnyStateMachine {
+    return (id != null ? registry.get(id) : undefined) ?? machine;
+  }
+
+  async function buildHandlerContext(
+    context: restate.ObjectContext,
+  ): Promise<HandlerContext> {
+    return {
+      ctx: context,
+      self,
+      parentKey: (await getParentKey(context)) ?? undefined,
+      invokeId: (await getInvokeId(context)) ?? undefined,
+      finalStateTTL,
+    };
+  }
+
+  // A machine transition runs synchronous user code (e.g. an `assign` reading
+  // Date.now() or a random id). Journaling the result via ctx.run makes a
+  // handler replay return the recorded Step instead of re-running that code,
+  // keeping the durable execution deterministic.
+  function computeStep(
+    context: restate.ObjectContext,
+    label: string,
+    compute: () => Step,
+  ): Promise<Step> {
+    return context.run(label, compute);
+  }
+
+  async function commit(handler: HandlerContext, result: Step): Promise<void> {
+    setState(handler.ctx, result.nextState);
+    await executeEffects(handler, result.effects);
+    await settleSubscriptions(handler, result.returned);
+    await reportTerminal(handler, result.returned);
+    maybeScheduleCleanup(handler, result.returned);
+  }
+
+  async function applyEvent(
+    context: restate.ObjectContext,
+    event: EventFrom<M>,
+  ): Promise<void> {
+    const stored = await getState(context);
+    if (stored == null) return;
+    const handler = await buildHandlerContext(context);
+    const instanceMachine = getMachine(await getMachineId(context));
+    const knownChildIds = Object.keys(await getChildren(context));
+    const result = await computeStep(context, "event", () =>
+      resumeStep(instanceMachine, {
+        stored,
+        event,
+        isChild: handler.parentKey != null,
+        knownChildIds,
+      }),
+    );
+    await commit(handler, result);
+  }
+
+  return restate.object({
+    name,
+    handlers: {
+      create: async (context: restate.ObjectContext, input: InputFrom<M>) => {
+        clearRuntimeState(context);
+        clearIdentity(context);
+        const handler = await buildHandlerContext(context);
+        const result = await computeStep(context, "create", () =>
+          initialStep(machine, { input, isChild: false }),
+        );
+        await commit(handler, result);
+      },
+
+      initChild: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (context: restate.ObjectContext, request: InitRequest) => {
+          clearRuntimeState(context);
+          setIdentity(context, request);
+          const handler = await buildHandlerContext(context);
+          const result = await computeStep(context, "initChild", () =>
+            initialStep(getMachine(request.machineId), {
+              input: request.input,
+              isChild: true,
+            }),
+          );
+          await commit(handler, result);
+        },
+      ),
+
+      send: async (context: restate.ObjectContext, event: EventFrom<M>) => {
+        await validateNotDisposed(context);
+        await validateExists(context);
+        await applyEvent(context, event);
+      },
+
+      deliverScheduled: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (context: restate.ObjectContext, request: ScheduledEvent) => {
+          const scheduled = await getScheduled(context);
+          const entry = scheduled[request.sendId];
+          if (!entry || entry.uuid !== request.uuid) return;
+
+          delete scheduled[request.sendId];
+          setScheduled(context, scheduled);
+
+          if (entry.targetKey === context.key) {
+            await applyEvent(context, entry.event as EventFrom<M>);
+          } else {
+            sendClient(context, self, entry.targetKey).send(entry.event);
+          }
+        },
+      ),
+
+      executeActor: restate.handlers.object.shared(
+        { ingressPrivate: true, enableLazyState: true },
+        async (
+          context: restate.ObjectSharedContext,
+          request: ExecuteRequest,
+        ) => {
+          const instanceMachine = getMachine(await getMachineId(context));
+          const event = await runActor(
+            instanceMachine,
+            request.params,
+            context,
+          );
+          sendClient(context, self, context.key).send(event);
+        },
+      ),
+
+      snapshot: async (
+        context: restate.ObjectContext,
+      ): Promise<ReturnedSnapshot> => {
+        await validateNotDisposed(context);
+        await validateExists(context);
+        const instanceMachine = getMachine(await getMachineId(context));
+        const stored = (await getState(context))!;
+        return toReturnedSnapshot(fromStored(instanceMachine, stored));
+      },
+
+      subscribe: async (
+        context: restate.ObjectContext,
+        request: SubscribeRequest,
+      ) => {
+        await validateNotDisposed(context);
+        await validateExists(context);
+        validateCondition(request.condition);
+
+        const instanceMachine = getMachine(await getMachineId(context));
+        const stored = (await getState(context))!;
+        const returned = toReturnedSnapshot(
+          fromStored(instanceMachine, stored),
+        );
+        const outcome = evaluateCondition(returned, request.condition);
+        if (outcome.status === "resolve") {
+          context.resolveAwakeable(request.awakeableId, outcome.snapshot);
+          return;
+        }
+        if (outcome.status === "reject") {
+          context.rejectAwakeable(request.awakeableId, outcome.reason);
+          return;
+        }
+
+        const subscriptions = await getSubscriptions(context);
+        const existing = subscriptions[request.condition];
+        if (existing) {
+          existing.awakeables.push(request.awakeableId);
+        } else {
+          subscriptions[request.condition] = {
+            awakeables: [request.awakeableId],
+          };
+        }
+        setSubscriptions(context, subscriptions);
+      },
+
+      waitFor: restate.handlers.object.shared(
+        async (
+          context: restate.ObjectSharedContext,
+          request: WaitForRequest<M>,
+        ): Promise<ReturnedSnapshot> => {
+          await validateNotDisposed(context);
+          await validateExists(context);
+          validateCondition(request.condition);
+
+          const { id, promise } = context.awakeable<ReturnedSnapshot>();
+
+          await client(context, self, context.key).subscribe({
+            condition: request.condition,
+            awakeableId: id,
+          });
+
+          if (request.event) {
+            sendClient(context, self, context.key).send(request.event);
+          }
+
+          try {
+            return request.timeout !== undefined
+              ? await promise.orTimeout(request.timeout)
+              : await promise;
+          } catch (error) {
+            if (!(error instanceof restate.TerminalError)) throw error;
+            if (error.code != 500) throw error;
+            // awakeable rejection -> 412 so clients know it is non-transient
+            throw new restate.TerminalError(error.message, { errorCode: 412 });
+          }
+        },
+      ),
+
+      cleanupState: restate.handlers.object.exclusive(
+        { ingressPrivate: true },
+        async (context: restate.ObjectContext) => {
+          markDisposedAndClear(context);
+        },
+      ),
+    } satisfies MachineVirtualObject<M>,
+    options,
+  });
+}
+
+// ===========================================================================
+// Internals
+// ===========================================================================
+
+/** Reject (410) once an instance has been disposed after its final state. */
+async function validateNotDisposed(
+  context: restate.ObjectSharedContext,
+): Promise<void> {
+  if (await isDisposed(context)) {
+    throw new restate.TerminalError(
+      "The state machine has been disposed after reaching it's final state",
+      { errorCode: 410 },
+    );
+  }
+}
+
+/** Reject (404) when a handler is called before `create`. */
+async function validateExists(
+  context: restate.ObjectSharedContext,
+): Promise<void> {
+  if ((await getState(context)) == null) {
+    throw new restate.TerminalError(
+      "No state machine found for this workflow ID. Call 'create' first.",
+      { errorCode: 404 },
+    );
+  }
+}
+
+/** Reject (400) an unsupported wait condition. */
+function validateCondition(condition: string): void {
+  if (!isValidCondition(condition)) {
+    throw new restate.TerminalError("Invalid subscription condition", {
+      errorCode: 400,
+    });
+  }
+}

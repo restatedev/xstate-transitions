@@ -1,6 +1,6 @@
 import { assign, fromPromise, setup } from "xstate";
 import * as restate from "@restatedev/restate-sdk";
-import { createMachineObject } from "./core";
+import { createMachineObject } from "./index";
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -21,13 +21,6 @@ interface PaymentReceivedEvent {
   };
   funds: {
     available: boolean;
-  };
-}
-
-interface ConfirmationCompletedEvent {
-  type: "ConfirmationCompletedEvent";
-  payment: {
-    amount: number;
   };
 }
 

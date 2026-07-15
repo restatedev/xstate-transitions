@@ -8,10 +8,9 @@
  * directory of this repository or package, or at
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import { fromPromise, setup } from "xstate";
 import { eventually } from "./eventually.js";
@@ -60,14 +59,12 @@ export const workflow = setup({
   },
 });
 
-describe("A fromPromise based state machine", () => {
+describeE2E("A fromPromise based state machine", (createActor) => {
   it(
     "Will complete the workflow successfully",
     { timeout: 60_000 },
     async () => {
-      using machine = await createRestateTestActor<
-        { status?: string } | undefined
-      >({
+      using machine = await createActor<{ status?: string } | undefined>({
         machine: workflow,
         input: { customer: "bob@mop.com" },
       });

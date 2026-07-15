@@ -10,8 +10,8 @@
  */
 
 import { fromPromise } from "xstate";
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import { setup } from "xstate";
 import { eventually } from "./eventually.js";
@@ -95,14 +95,12 @@ export const workflow = setup({
   },
 });
 
-describe("An applicant workflow", () => {
+describeE2E("An applicant workflow", (createActor) => {
   it(
     "Will complete the workflow successfully",
     { timeout: 30_000 },
     async () => {
-      using actor = await createRestateTestActor<
-        { value?: string } | undefined
-      >({
+      using actor = await createActor<{ value?: string } | undefined>({
         machine: workflow,
         input: {
           applicant: {

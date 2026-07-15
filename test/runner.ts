@@ -14,30 +14,42 @@ import {
   RestateTestEnvironment,
 } from "@restatedev/restate-sdk-testcontainers";
 import * as clients from "@restatedev/restate-sdk-clients";
-import { AnyStateMachine, type AnyEventObject } from "xstate";
-import { createMachineObject } from "../src/core";
-import { MachineVirtualObject } from "../src/types";
+import type { AnyStateMachine } from "xstate";
+import { type AnyEventObject } from "xstate";
+import { createMachineObject } from "../src";
+import type { MachineVirtualObject } from "../src";
+import { type MachineObjectOptions } from "../src";
 
 export type RunMachineOptions = {
   machine: AnyStateMachine;
   key?: string;
   input?: unknown;
+  options?: MachineObjectOptions;
+  /**
+   * Force restate-server to always replay at suspension points, surfacing any
+   * non-determinism in the handlers. Set by the parameterized e2e harness.
+   */
+  alwaysReplay?: boolean;
 };
 
 export type RunningMachine<SnapshotType> = {
+  create: (input?: unknown) => Promise<void>;
   send: (event: AnyEventObject) => Promise<void>;
   snapshot(): Promise<SnapshotType>;
+  waitFor(
+    condition: string,
+    event?: AnyEventObject,
+    timeout?: number,
+  ): Promise<SnapshotType>;
   [Symbol.dispose](): void;
 };
 
 export async function createRestateTestActor<SnapshotType>(
   opts: RunMachineOptions,
 ): Promise<RunningMachine<SnapshotType>> {
+  const obj = createMachineObject("default", opts.machine, opts.options);
   const env = await RestateTestEnvironment.start(
-    (restateServer) => {
-      const obj = createMachineObject("default", opts.machine);
-      restateServer.bind(obj);
-    },
+    { services: [obj], alwaysReplay: opts.alwaysReplay ?? false },
     () =>
       new RestateContainer().withEnvironment({
         RESTATE_DEFAULT_NUM_PARTITIONS: "2",
@@ -56,12 +68,27 @@ export async function createRestateTestActor<SnapshotType>(
     );
     await client.create({ ...(opts.input ?? {}) });
     return {
+      create: async (input?: unknown) => {
+        return await client.create({ ...((input ?? {}) as object) });
+      },
       send: async (event: AnyEventObject) => {
         return await client.send(event);
       },
 
       snapshot: async () => {
         return (await client.snapshot()) as SnapshotType;
+      },
+
+      waitFor: async (
+        condition: string,
+        event?: AnyEventObject,
+        timeout?: number,
+      ) => {
+        return (await client.waitFor({
+          condition,
+          event,
+          timeout,
+        })) as SnapshotType;
       },
 
       [Symbol.dispose]: () => {

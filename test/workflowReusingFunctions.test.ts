@@ -9,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import {
   assign,
@@ -206,38 +206,32 @@ const parentWorkflow = createMachine({
   },
 });
 
-describe("Reusing functions workflow", () => {
-  it(
-    "Will complete successfully",
-    { todo: true, timeout: 60_000 },
-    async () => {
-      using actor = await createRestateTestActor<
-        SnapshotFrom<typeof parentWorkflow>
-      >({
-        machine: parentWorkflow,
-      });
+describeE2E("Reusing functions workflow", (createActor) => {
+  it("Will complete successfully", { timeout: 60_000 }, async () => {
+    using actor = await createActor<SnapshotFrom<typeof parentWorkflow>>({
+      machine: parentWorkflow,
+    });
 
-      await actor.send({
-        type: "PaymentReceivedEvent",
-        accountId: "1234",
+    await actor.send({
+      type: "PaymentReceivedEvent",
+      accountId: "1234",
+      payment: {
+        amount: 100,
+      },
+      customer: {
+        name: "John Doe",
+      },
+      funds: {
+        available: true,
+      },
+    });
+
+    await eventually(() => actor.snapshot()).toMatchObject({
+      context: {
         payment: {
-          amount: 100,
+          amount: 1337,
         },
-        customer: {
-          name: "John Doe",
-        },
-        funds: {
-          available: true,
-        },
-      });
-
-      await eventually(() => actor.snapshot()).toMatchObject({
-        context: {
-          payment: {
-            amount: 1337,
-          },
-        },
-      });
-    },
-  );
+      },
+    });
+  });
 });

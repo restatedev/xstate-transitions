@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 /*
  * Copyright (c) 2023-2024 - Restate Software, Inc., Restate GmbH
  *
@@ -10,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it, vi } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import { createMachine, assign, type SnapshotFrom, fromPromise } from "xstate";
 import { eventually } from "./eventually.js";
@@ -20,7 +19,6 @@ async function delay(ms: number, errorProbability: number = 0): Promise<void> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
       if (Math.random() < errorProbability) {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
         reject({ type: "ServiceNotAvailable" });
       } else {
         resolve();
@@ -128,11 +126,9 @@ const vitalsWorkflow = createMachine(
   },
 );
 
-describe("A car vitals workflow", () => {
+describeE2E("A car vitals workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-    using actor = await createRestateTestActor<
-      SnapshotFrom<typeof vitalsWorkflow>
-    >({
+    using actor = await createActor<SnapshotFrom<typeof vitalsWorkflow>>({
       machine: vitalsWorkflow,
     });
 

@@ -9,8 +9,8 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import { describe, it } from "vitest";
-import { createRestateTestActor } from "./runner";
+import { it } from "vitest";
+import { describeE2E } from "./harness";
 
 import { createMachine, assign, fromPromise } from "xstate";
 import { eventually } from "./eventually.js";
@@ -19,7 +19,6 @@ async function delay(ms: number, errorProbability: number = 0): Promise<void> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
       if (Math.random() < errorProbability) {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
         reject({ type: "ServiceNotAvailable" });
       } else {
         resolve();
@@ -92,9 +91,8 @@ export const workflow = createMachine(
             actions: assign({
               // TODO: Fix typing issue
               book: ({ context, event }) => ({
-                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                 ...context.book!,
-                // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+
                 status: event.output.status,
               }),
             }),
@@ -274,9 +272,9 @@ export const workflow = createMachine(
   },
 );
 
-describe("An book landing workflow", () => {
+describeE2E("An book landing workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-    using actor = await createRestateTestActor<
+    using actor = await createActor<
       { value?: { "Check Out Book": string } } | undefined
     >({
       machine: workflow,
