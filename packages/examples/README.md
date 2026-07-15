@@ -50,6 +50,8 @@ curl http://localhost:8080/auction/car-1/create --json '{}'
 curl http://localhost:8080/auction/car-1/send   --json '{"type":"CarBidEvent","bid":{"carId":"car-1","amount":4000,"bidder":{"id":"a","firstName":"Jane","lastName":"Doe"}}}'
 ```
 
-See the library [MANUAL](../xstate-transitions/MANUAL.md) for the full authoring
-and runtime model, including attaching a runtime `contract` (Standard Schema /
-Zod) to validate ingress.
+Every example declares its `input`/`events` with [Zod](https://zod.dev) schemas,
+so `create`/`send` are validated and their JSON Schemas appear in Restate
+discovery. See the library [MANUAL](../xstate-transitions/MANUAL.md) for the full
+authoring and runtime model, including how ingress validation is derived from a
+machine's own `schemas`.

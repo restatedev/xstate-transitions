@@ -10,6 +10,7 @@
  */
 
 import { setup, types } from "xstate";
+import { z } from "zod";
 import {
   createMachineObject,
   fromPromise,
@@ -23,23 +24,17 @@ async function delay(ms: number): Promise<void> {
   });
 }
 
-interface PaymentReceivedEvent {
-  accountId: string;
-  payment: {
-    amount: number;
-  };
-  customer: {
-    name: string;
-  };
-  funds: {
-    available: boolean;
-  };
-}
+const PaymentReceivedEvent = z.object({
+  accountId: z.string(),
+  payment: z.object({ amount: z.number() }),
+  customer: z.object({ name: z.string() }),
+  funds: z.object({ available: z.boolean() }),
+});
 
 export const workflow = setup({
   schemas: {
     events: {
-      PaymentReceivedEvent: types<PaymentReceivedEvent>(),
+      PaymentReceivedEvent,
     },
     context: types<{
       payment: {

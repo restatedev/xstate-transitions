@@ -24,13 +24,19 @@
  */
 
 import { setup, types } from "xstate";
+import { z } from "zod";
 import { createMachineObject } from "@restatedev/xstate-transitions";
 
-interface Bid {
-  carId: string;
-  amount: number;
-  bidder: { id: string; firstName: string; lastName: string };
-}
+const Bid = z.object({
+  carId: z.string(),
+  amount: z.number(),
+  bidder: z.object({
+    id: z.string(),
+    firstName: z.string(),
+    lastName: z.string(),
+  }),
+});
+type Bid = z.infer<typeof Bid>;
 
 // How long the auction accepts bids. In production this would be minutes or
 // hours; the value is inlined because named delays are not a v6 setup key.
@@ -40,9 +46,9 @@ export const auctionMachine = setup({
   schemas: {
     context: types<{ bids: Bid[] }>(),
     events: {
-      // The payload carried by every `CarBidEvent`. Because it is declared
-      // here, `event.bid` is fully typed in the transition below.
-      CarBidEvent: types<{ bid: Bid }>(),
+      // The payload carried by every `CarBidEvent`. A real Zod schema here makes
+      // the event validate at ingress and surface its JSON Schema in discovery.
+      CarBidEvent: z.object({ bid: Bid }),
     },
   },
 }).createMachine({

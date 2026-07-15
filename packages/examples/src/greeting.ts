@@ -21,6 +21,7 @@
  */
 
 import { setup, types } from "xstate";
+import { z } from "zod";
 import {
   createMachineObject,
   fromPromise,
@@ -31,10 +32,11 @@ async function delay(ms: number): Promise<void> {
 }
 
 export const greetingMachine = setup({
-  // `schemas` types the machine's public surface. `input` flows into `create`,
-  // and every transition below reads a fully-typed `context`.
+  // `schemas` types the machine's public surface. A real Zod schema on `input`
+  // makes `createMachineObject` validate `create` and publish its JSON Schema to
+  // Restate discovery; `context` stays type-only (it is not an ingress boundary).
   schemas: {
-    input: types<{ person: { name: string } }>(),
+    input: z.object({ person: z.object({ name: z.string() }) }),
     context: types<{ name: string; greeting: string | null }>(),
   },
   actorSources: {

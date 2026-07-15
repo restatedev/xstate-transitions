@@ -11,8 +11,8 @@
 
 /*
  * End-to-end proof that `createMachineObject` derives its ingress serdes from a
- * machine's own v6 `schemas` (no `contract` passed): real Standard Schemas on
- * `schemas.input` / `schemas.events` validate and coerce the public boundary.
+ * machine's own v6 `schemas`: real Standard Schemas on `schemas.input` /
+ * `schemas.events` validate and coerce the public boundary.
  */
 
 import { expect, it } from "vitest";
@@ -86,7 +86,7 @@ const counter = setup({
 
 describeE2E("Serdes derived from machine.schemas", (createActor) => {
   it(
-    "coerces input and events and rejects invalid ones, with no contract",
+    "coerces input and events and rejects invalid ones, from schemas alone",
     { timeout: 30_000 },
     async () => {
       using actor = await createActor<

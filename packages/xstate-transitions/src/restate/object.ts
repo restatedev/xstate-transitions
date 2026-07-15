@@ -31,7 +31,11 @@ import type {
   StoredState,
 } from "../xstate/types";
 import { parseContract, publicEventProblem } from "./contracts";
-import { deriveEventSchema, deriveInputSchema } from "./schemas";
+import {
+  deriveEventSchema,
+  deriveInputSchema,
+  genericEventSchema,
+} from "./schemas";
 import {
   executeEffects,
   maybeScheduleCleanup,
@@ -110,8 +114,7 @@ const INTERNAL_LAZY_HANDLER_OPTIONS = {
  *
  * @param name The virtual object service name.
  * @param machine The root machine and entry point to its reachable child graph.
- * @param options Restate options, runtime contracts, and optional final-state
- * cleanup TTL.
+ * @param options Restate options and optional final-state cleanup TTL.
  * @returns A Restate virtual object definition ready to bind to an endpoint.
  */
 export function createMachineObject<
@@ -120,15 +123,17 @@ export function createMachineObject<
 >(
   name: P,
   machine: M,
-  options?: MachineObjectOptions<M>,
+  options?: MachineObjectOptions,
 ): restate.VirtualObjectDefinition<P, MachineVirtualObject<M>> {
-  const { finalStateTTL, contract, ...objectOptions } = options ?? {};
+  const { finalStateTTL, ...objectOptions } = options ?? {};
   validateFinalStateTTL(finalStateTTL);
 
-  // Default the ingress serdes to the machine's own v6 `schemas`; an explicit
-  // `contract` overrides them per boundary (see ./schemas).
-  const inputSchema = contract?.input ?? deriveInputSchema(machine);
-  const eventSchema = contract?.event ?? deriveEventSchema(machine);
+  // The ingress serdes come from the machine's own v6 `schemas` (see ./schemas).
+  // `send` falls back to the generic `{ type, ... }` event envelope so it always
+  // advertises a schema, even when the machine declares no (real) event schema.
+  const inputSchema = deriveInputSchema(machine);
+  const eventSchema =
+    deriveEventSchema(machine) ?? genericEventSchema<EventFrom<M>>();
 
   const inputSerde = selectSerde(inputSchema);
   const eventSerde = selectSerde(eventSchema);
@@ -165,8 +170,9 @@ export function createMachineObject<
        * Delivers an application event through the machine's public ingress.
        *
        * The event is rejected if it resembles a reserved XState lifecycle
-       * event, and is validated by the optional event contract before this
-       * handler runs. The handler requires an existing, non-disposed instance
+       * event, and is validated against the machine's derived event schema
+       * (from `schemas.events`) before this handler runs. The handler requires
+       * an existing, non-disposed instance
        * and returns only after the transition and its effects are durable.
        */
       send: restate.createObjectHandler(
@@ -395,7 +401,7 @@ export class MachineRuntime<M extends AnyStateMachine = AnyStateMachine> {
 class MachineHandlers<M extends AnyStateMachine> {
   constructor(
     private readonly runtime: MachineRuntime<M>,
-    private readonly eventContract: StandardSchema<EventFrom<M>> | undefined,
+    private readonly eventSchema: StandardSchema<EventFrom<M>> | undefined,
   ) {}
 
   create(context: restate.ObjectContext, input: InputFrom<M>): Promise<void> {
@@ -465,7 +471,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     const event =
       request.event === undefined
         ? undefined
-        : parsePublicEvent(this.eventContract, request.event);
+        : parsePublicEvent(this.eventSchema, request.event);
     const { id, promise } = context.awakeable<ReturnedSnapshot>();
 
     const subscriber = context.objectClient<MachineVirtualObject>(
@@ -828,7 +834,7 @@ function selectSerde<T>(
   if (schema !== undefined) return restate.serde.schema(schema);
 
   // JsonSerde's optional schema property is wider than Serde<T> under this
-  // project's exactOptionalPropertyTypes setting; its runtime contract is the
+  // project's exactOptionalPropertyTypes setting; its runtime behavior is the
   // default JSON Serde we want here.
   return restate.serde.json as restate.Serde<T>;
 }
