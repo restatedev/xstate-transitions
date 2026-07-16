@@ -173,6 +173,38 @@ describe("initialStep()", () => {
     ).toMatchObject([{ childId: "grandchild", machineId: "grandchild" }]);
   });
 
+  it("derives a deterministic child id for an invoke without an explicit id", () => {
+    // Auto-generated invoke ids feed both our parent::childId virtual-object key
+    // and the done-event addressing, so they must be stable across replay/restart
+    // — a nondeterministic id would break re-association of an in-flight child
+    // after the process rehydrates. The id is derived from the defining state
+    // path, so two independent runs must produce the same startChild childId.
+    const child = createMachine({
+      id: "child",
+      initial: "a",
+      states: { a: {} },
+    });
+    const build = () =>
+      setup({ actorSources: { child } }).createMachine({
+        id: "parent",
+        initial: "run",
+        states: { run: { invoke: { src: "child" } } },
+      });
+
+    const first = byKind(
+      initialStep(build(), { isChild: false }).effects,
+      "startChild",
+    );
+    const second = byKind(
+      initialStep(build(), { isChild: false }).effects,
+      "startChild",
+    );
+    expect(first).toHaveLength(1);
+    expect((first[0] as Extract<Effect, { kind: "startChild" }>).childId).toBe(
+      (second[0] as Extract<Effect, { kind: "startChild" }>).childId,
+    );
+  });
+
   it("does not start an actor spawned and stopped in the same macrostep", () => {
     // A transition that spawns then stops the same ref leaves it out of the
     // settled snapshot's children; the integration must not run its effect.

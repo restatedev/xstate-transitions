@@ -193,4 +193,63 @@ describe("internal transitions — entry set", () => {
     expect(byKind(clicked.effects, "stopChild")).toHaveLength(0);
     expect(byKind(clicked.effects, "startChild")).toHaveLength(0);
   });
+
+  it("enters a relative `after` target's descendant without re-entering the parent", () => {
+    // A delayed transition with a relative target must compute the same entry set
+    // as any other transition: the compound parent is NOT re-entered, only the
+    // targeted descendant is. If the parent were wrongly re-entered, its entry
+    // effects would fire twice on delivery of the (durably scheduled) after event
+    // — a double-side-effect hazard specific to our delayed-self-send delivery.
+    type Ctx = { parentEntries: number; threeEntries: number };
+    const machine = setup({ schemas: { context: types<Ctx>() } }).createMachine(
+      {
+        id: "aftp",
+        context: { parentEntries: 0, threeEntries: 0 },
+        initial: "p",
+        states: {
+          p: {
+            initial: "one",
+            entry: ({ context }) => ({
+              context: { ...context, parentEntries: context.parentEntries + 1 },
+            }),
+            after: { 10: { target: ".three" } },
+            states: {
+              one: {},
+              two: {},
+              three: {
+                entry: ({ context }) => ({
+                  context: {
+                    ...context,
+                    threeEntries: context.threeEntries + 1,
+                  },
+                }),
+              },
+            },
+          },
+        },
+      },
+    );
+
+    const created = initialStep(machine, { isChild: false });
+    expect(created.nextState.value).toEqual({ p: "one" });
+    expect(created.nextState.context).toEqual({
+      parentEntries: 1,
+      threeEntries: 0,
+    });
+
+    // Deliver the scheduled after event exactly as deliverScheduled would.
+    const fired = resumeStep(machine, {
+      stored: created.nextState,
+      event: { type: "xstate.after.10.aftp.p" },
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(fired.nextState.value).toEqual({ p: "three" });
+    // Parent entered exactly once; only the relative target's descendant entered.
+    expect(fired.nextState.context).toEqual({
+      parentEntries: 1,
+      threeEntries: 1,
+    });
+  });
 });
