@@ -173,6 +173,38 @@ describe("initialStep()", () => {
     ).toMatchObject([{ childId: "grandchild", machineId: "grandchild" }]);
   });
 
+  it("derives a deterministic child id for an invoke without an explicit id", () => {
+    // Auto-generated invoke ids feed both our parent::childId virtual-object key
+    // and the done-event addressing, so they must be stable across replay/restart
+    // — a nondeterministic id would break re-association of an in-flight child
+    // after the process rehydrates. The id is derived from the defining state
+    // path, so two independent runs must produce the same startChild childId.
+    const child = createMachine({
+      id: "child",
+      initial: "a",
+      states: { a: {} },
+    });
+    const build = () =>
+      setup({ actorSources: { child } }).createMachine({
+        id: "parent",
+        initial: "run",
+        states: { run: { invoke: { src: "child" } } },
+      });
+
+    const first = byKind(
+      initialStep(build(), { isChild: false }).effects,
+      "startChild",
+    );
+    const second = byKind(
+      initialStep(build(), { isChild: false }).effects,
+      "startChild",
+    );
+    expect(first).toHaveLength(1);
+    expect((first[0] as Extract<Effect, { kind: "startChild" }>).childId).toBe(
+      (second[0] as Extract<Effect, { kind: "startChild" }>).childId,
+    );
+  });
+
   it("does not start an actor spawned and stopped in the same macrostep", () => {
     // A transition that spawns then stops the same ref leaves it out of the
     // settled snapshot's children; the integration must not run its effect.
@@ -507,6 +539,33 @@ describe("resumeStep() — events and routing", () => {
     ]);
   });
 
+  it("emits no send effect for sendTo of an undefined/missing actor ref", () => {
+    // A transition that targets a child that does not exist (an undefined ref)
+    // must not produce a send effect at all — otherwise we would issue a spurious
+    // Restate call to a nonexistent object. This is the planning-layer companion
+    // to effects.ts dropping sends to a vanished target at execution time.
+    const parent = setup({}).createMachine({
+      id: "parent",
+      on: {
+        PING: ({ children }, enq) => {
+          enq.sendTo((children as Record<string, never>).missing, {
+            type: "X",
+          } as never);
+        },
+      },
+    });
+    const created = initialStep(parent, { isChild: false });
+    const result = resumeStep(parent, {
+      stored: created.nextState,
+      event: { type: "PING" },
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(byKind(result.effects, "send")).toEqual([]);
+    expect(byKind(result.effects, "scheduleSend")).toEqual([]);
+  });
+
   it("stops a child explicitly stopped via a context-held ref after rehydration", () => {
     // The stored ref is a JSON-revived object, so it no longer matches the
     // injected stub and XState's identity-based removal leaves the child in
@@ -682,6 +741,44 @@ describe("step — resolution semantics", () => {
     });
     expect(result.returned.status).toBe("done");
     expect(result.returned.output).toEqual({ ok: true });
+  });
+
+  it("threads a final state's entry context patch into its output", () => {
+    // Complements the exit-patch quirk documented above: entry patches ARE
+    // threaded into context before the state's `output` expression runs, so the
+    // output persisted in the snapshot reflects the entry-updated context. A
+    // regression here would silently corrupt the durable output / onDone event.
+    type Ctx = { count: number; captured?: unknown };
+    const machine = setup({ schemas: { context: types<Ctx>() } }).createMachine(
+      {
+        id: "m",
+        context: { count: 0 },
+        initial: "a",
+        states: {
+          a: {
+            initial: "a1",
+            states: {
+              a1: { on: { NEXT: { target: "a2" } } },
+              a2: {
+                type: "final",
+                entry: () => ({ context: { count: 1 } }),
+                output: ({ context }) => context.count,
+              },
+            },
+            onDone: ({ event }) => ({ context: { captured: event.output } }),
+          },
+        },
+      },
+    );
+    const created = initialStep(machine, { isChild: false });
+    const result = resumeStep(machine, {
+      stored: created.nextState,
+      event: { type: "NEXT" },
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect((result.nextState.context as Ctx).captured).toBe(1);
   });
 
   it("round-trips through the persisted state across many steps", () => {
