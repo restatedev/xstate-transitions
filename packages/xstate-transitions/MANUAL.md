@@ -17,7 +17,7 @@ implementation, durability model, and testing strategy.
   - [The mental model](#the-mental-model)
   - [Quick start](#quick-start)
   - [Calling a machine](#calling-a-machine)
-  - [Runtime ingress validation](#runtime-ingress-validation)
+  - [XState v6 schemas and runtime ingress validation](#xstate-v6-schemas-and-runtime-ingress-validation)
   - [Modeling durable workflows](#modeling-durable-workflows)
   - [Promise actors and external effects](#promise-actors-and-external-effects)
   - [Delays and cancellation](#delays-and-cancellation)
@@ -69,6 +69,12 @@ integration:
 
 This makes the process stateless between requests while Restate owns durable
 state, message delivery, retries, delays, and recovery.
+
+Application code does not save the XState snapshot or call `ctx.set` for
+machine context. Every successful `create`, event delivery, or actor/child
+completion automatically checkpoints the settled machine snapshot. If the
+process stops, Restate resumes from the journal and the last durable snapshot
+rather than from an in-memory actor or JavaScript call stack.
 
 ## Quick start
 
@@ -188,7 +194,7 @@ const orders = createMachineObject("orders", orderMachine, {
 restate.endpoint().bind(orders).listen();
 ```
 
-The integration exposes two actor factories, and vanilla XState actors
+The integration exposes two actor factories, and ordinary XState actors
 (`createAsyncLogic`, etc.) remain usable:
 
 ```ts
@@ -258,17 +264,33 @@ surface, while `EventFrom` and `InputFrom` flow from the XState machine into
 its resulting effects have been dispatched. Invoked promise actors and child
 machines continue asynchronously and report their results through later events.
 
-## Runtime ingress validation
+## XState v6 schemas and runtime ingress validation
+
+XState v6 machine `schemas` can contain runtime
+[Standard Schema](https://standardschema.dev/) validators and remain available
+on the constructed machine. This is different from a type-only declaration:
+the integration can read those v6 schemas and reuse them as Restate handler
+serdes. There is no second Restate-specific schema configuration to keep in
+sync.
+
+The current integration consumes two entries:
+
+| XState v6 entry  | Restate boundary                                                         |
+| ---------------- | ------------------------------------------------------------------------ |
+| `schemas.input`  | Validates/coerces `create` input and describes it in service discovery   |
+| `schemas.events` | Validates/coerces `send` and `waitFor.event`; describes `send` discovery |
+
+Other entries, such as `schemas.context`, remain XState concerns; this
+integration does not turn them into public handler serdes. In particular, an
+input schema validates what enters `create`; it does not continuously validate
+machine context after every transition. Context must independently remain
+serializable.
 
 TypeScript types disappear at runtime, while Restate ingress, generated clients,
-and other services can all supply untrusted JSON. The integration validates the
-public boundary from the machine's own XState v6 `schemas`: every entry is a
-[Standard Schema](https://standardschema.dev/), the interface Restate's serde
-layer consumes directly. There is nothing else to configure.
-
-Use a real schema library (Zod 4, Valibot, ArkType, …) so the boundary is
-actually checked — and, for libraries that implement the Standard JSON Schema
-extension (Zod 4 does), published to the service's discovery manifest:
+and other services can all supply untrusted JSON. Use a real schema library
+(Zod 4, Valibot, ArkType, …) so the public boundary is actually checked — and,
+for libraries that implement the Standard JSON Schema extension (Zod 4 does),
+published to the service's discovery manifest:
 
 ```ts
 import { z } from "zod";
@@ -297,12 +319,13 @@ With real schemas in place:
 - the input and event JSON Schemas appear in the discovery manifest; and
 - validation failures are terminal status 400 errors.
 
-Two rules shape how `schemas` map to the boundary:
+Three rules shape how `schemas` map to the boundary:
 
-- **`types<T>()` is type-only.** It erases at runtime — its validator accepts
-  everything and it carries no JSON Schema — so the integration treats it as "no
-  runtime validator." A type-only `input` is then absent from discovery; reach
-  for a real schema library at any boundary you want checked or published.
+- **A v6 schema may still be type-only.** `types<T>()` supplies TypeScript
+  information but performs no meaningful runtime validation and carries no JSON
+  Schema. The integration therefore treats it as "no runtime validator." A
+  type-only `input` is absent from discovery; use a real Standard Schema at any
+  boundary you want checked or published.
 - **`schemas.events` becomes one discriminated schema.** XState stores a payload
   schema per event type, without the `type` field. The integration adapts the map
   into a single Standard Schema that checks `type` names a declared event,
@@ -315,6 +338,11 @@ Two rules shape how `schemas` map to the boundary:
   `type` and publishes that envelope to discovery. The reserved `xstate.*`
   namespace is still rejected.
 
+When porting a v5 machine, moving a TypeScript declaration into v6
+`schemas` with `types<T>()` improves typing but does not add runtime validation.
+Replace the public `input` and event entries with real Standard Schemas when you
+want Restate ingress validation, coercion, and discovery metadata.
+
 Schemas may transform input, and the machine receives the parsed output. Keep
 validation synchronous: Restate handler deserialization is synchronous, so an
 asynchronous validator is rejected rather than awaited. Also reserve the
@@ -326,6 +354,26 @@ does not prove a value was checked at runtime. If your library exposes a Standar
 Schema adapter (Zod, Valibot, ArkType, TypeBox via an adapter, …), use that.
 
 ## Modeling durable workflows
+
+### Think in durable checkpoints
+
+The durable unit is a complete XState macrostep. One call applies an external
+event and lets immediate `raise` events, `always` transitions, guards, and
+`assign` expressions settle. The integration then stores the resulting state
+value, context, status, output/error, and history before the handler completes.
+Observers see that settled checkpoint, not each transient microstate visited on
+the way to it.
+
+Checkpointing is automatic for initial transitions and for transitions caused
+by public events, delayed events, child messages, and actor results. Restate
+also journals the abstract `Step` and the operations used to commit its effects,
+so a replay does not require an in-memory XState actor to have survived. Do not
+add manual persistence calls around `assign`; make the next durable state and
+context the result of the transition.
+
+A checkpoint does not preserve arbitrary local variables or a suspended
+JavaScript stack. Progress that must survive should be represented as machine
+state/context, or as journaled operations inside a `fromHandler` actor.
 
 ### Keep transition logic pure
 
@@ -348,7 +396,8 @@ workflow decision needs time, randomness, or I/O.
 
 ### Persist only serializable data
 
-Context, events, actor input/output, errors, and machine output cross a durable
+Treat machine context as a durable record, not as an in-memory object graph.
+Context, events, actor input/output, errors, and machine output all cross a JSON
 serialization boundary. Store plain data:
 
 - objects, arrays, strings, numbers, booleans, and `null`;
@@ -356,10 +405,16 @@ serialization boundary. Store plain data:
 - timestamps instead of `Date` instances; and
 - plain error data instead of relying on an `Error` prototype.
 
-Do not store functions, class instances, sockets, database handles, or arbitrary
-XState actor references in context. Actor references created by supported
-`spawn` patterns are reconstructed only for routing; they are not general
-serializable application data.
+Do not store `Date`, `Map`, `Set`, `BigInt`, functions, class instances, sockets,
+database handles, or arbitrary XState actor references in context. Convert them
+to explicit JSON-safe representations first. Actor references created by
+supported `spawn` patterns are reconstructed only for routing; they are not
+general serializable application data.
+
+Runtime ingress schemas do not enforce this invariant: they validate public
+input/events, while later transitions and actor outputs can still put an
+unserializable value into context. Keep context types JSON-shaped and test
+snapshot round trips for important machines.
 
 ### Make illegal states hard to express
 
@@ -376,35 +431,45 @@ The root and every reachable child machine must have a unique machine `id`.
 `createMachineObject` rejects distinct machine definitions that reuse an ID,
 because persisted child records resolve their logic by that ID.
 
-### Understand macrosteps
-
-One call applies one external event and lets XState settle the complete
-macrostep. Immediate `raise` events, `always` transitions, guards, and `assign`
-actions settle before the snapshot is committed. Observers see the settled
-snapshot, not every transient microstate visited inside it.
-
 ## Promise actors and external effects
 
 The integration provides two actor factories — `fromPromise` (ctx-less) and
-`fromHandler` (ctx-aware) — and keeps vanilla XState `fromPromise` working
-unchanged. All of them run out-of-band in the ingress-private `executeActor`
-handler and report back to the machine as `onDone` / `onError`. `fromPromise`
-and vanilla actors run inside `ctx.run`, so their side effect executes exactly
-once and their result is journaled (replay-safe). `fromHandler` receives the
-Restate `ctx` and journals its own effects.
+`fromHandler` (ctx-aware) — and also supports ordinary XState promise logic such
+as `createAsyncLogic`. All of them run out-of-band in the ingress-private
+`executeActor` handler and report back to the machine as `onDone` / `onError`.
+`fromPromise` and ordinary XState actors use one runtime-managed `ctx.run`;
+`fromHandler` receives the Restate `ctx` and defines its own journal boundaries.
 
-> While an actor runs, the machine's virtual object is **locked** — no event can
-> reach the machine to compensate for a failure until the actor settles. Prefer
-> `fromPromise` with a `{ retry }` policy (or `fromHandler`) for anything that
-> can fail transiently, rather than a fail-fast promise that gives up on the
-> first error.
+Actor work runs in a shared internal handler and does **not** hold the machine's
+exclusive transition lock. The machine can accept other events while an actor
+is running, and independent actors can overlap. Stopping an actor removes its
+durable execution generation; it does not forcibly cancel user code already in
+flight, but any late completion is ignored. The transition that starts an actor
+is one checkpoint; its eventual `onDone` or `onError` transition is another.
+
+### Which actor should I choose?
+
+| Choice                            | Creator receives | Retry behavior                                      | Pick it when                                                          |
+| --------------------------------- | ---------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| `fromPromise(creator)`            | `{ input }`      | Rejection goes directly to `onError`                | Failure on the first attempt is a modeled workflow outcome            |
+| `fromPromise(creator, { retry })` | `{ input }`      | Non-terminal failures retry under the given policy  | One self-contained operation needs transient-failure retries          |
+| `fromHandler(creator)`            | `{ input, ctx }` | Non-terminal failure retries the handler invocation | The actor needs Restate clients or several separately journaled steps |
+| XState `createAsyncLogic`         | XState arguments | Rejection goes directly to `onError`                | Existing compatible logic needs neither `ctx` nor a retry policy      |
+
+For a single ctx-less I/O operation, prefer `fromPromise` with an explicit,
+bounded retry policy. Choose `fromHandler` when the workflow needs Restate
+primitives such as service/object calls, durable time/randomness, awakeables, or
+multiple named `ctx.run` boundaries. Use bare `fromPromise` when retrying would
+be incorrect and the machine should handle the first failure immediately.
 
 ### `fromPromise` (ctx-less)
 
-The creator receives only `{ input }` and runs inside `ctx.run` for exactly-once
-durability. Retry is **opt-in and off by default** — a bare `fromPromise(creator)`
-is fail-fast: any rejection routes to `onError` (like vanilla xstate
-`fromPromise`, but durable).
+The creator receives only `{ input }`. Its outcome is recorded inside one
+`ctx.run`, so replay uses the journaled outcome instead of invoking a completed
+run again. Retry is **opt-in and off by default**: for a bare
+`fromPromise(creator)`, the runtime captures a rejection as the run's result and
+routes it to `onError`; the rejection is not presented to `ctx.run` as a
+retryable failure.
 
 ```ts
 import { fromPromise } from "./src";
@@ -424,6 +489,12 @@ const chargeCardRetried = fromPromise<Receipt, ChargeInput>(
 );
 ```
 
+Retries happen inside the same actor execution. The machine does not observe
+the intermediate failures; it receives `onDone` after a successful attempt or
+`onError` after a terminal failure or exhausted policy. Since retrying can call
+the external system more than once, pass a stable idempotency key in the actor
+input whenever the operation is not naturally idempotent.
+
 ### `fromHandler` (ctx-aware)
 
 ```ts
@@ -438,36 +509,41 @@ const reserve = fromHandler<Reservation, ReserveInput>(
 
 The creator receives `{ input, ctx }`. It runs directly — not wrapped in
 `ctx.run`, which would be illegal nested journaling — so it must journal its own
-side effects with `ctx.run`, and may use Restate-native clients from `ctx` when
-calling other Restate services. A `TerminalError` routes to `onError`; any other
-error is rethrown so Restate retries the whole invocation under its default
-policy. Follow the Restate SDK's idempotency guidance: a process can fail after
-an external system accepts a request but before its result is durably recorded.
+non-Restate side effects with `ctx.run`, and may use Restate-native clients from
+`ctx` directly. Because there is no outer run, the creator may issue multiple
+sequential `ctx.run` calls; do not call Restate context operations from inside a
+`ctx.run` callback. A `TerminalError` routes to `onError`; any other error is
+rethrown so Restate retries the whole invocation under its default policy.
+On replay, completed journal entries are reused and execution resumes at the
+next operation, so keep journaled operation order and names stable for the life
+of an invocation.
+Follow the Restate SDK's idempotency guidance: a process can fail after an
+external system accepts a request but before its result is durably recorded.
 
 ### Error behavior at a glance
 
-| Actor kind                   | Returns  | Throws `TerminalError` | Throws another error                  |
-| ---------------------------- | -------- | ---------------------- | ------------------------------------- |
-| `fromPromise` (no `retry`)   | `onDone` | `onError`              | `onError` (no retry)                  |
-| `fromPromise` (`{ retry }`)  | `onDone` | `onError`              | Retried by `ctx.run`; then `onError`  |
-| `fromHandler`                | `onDone` | `onError`              | Rethrown; Restate retries the handler |
-| Vanilla XState `fromPromise` | `onDone` | `onError`              | `onError` (no retry)                  |
+| Actor kind                  | Returns  | Throws `TerminalError` | Throws another error                  |
+| --------------------------- | -------- | ---------------------- | ------------------------------------- |
+| `fromPromise` (no `retry`)  | `onDone` | `onError`              | `onError` (no retry)                  |
+| `fromPromise` (`{ retry }`) | `onDone` | `onError`              | Retried by `ctx.run`; then `onError`  |
+| `fromHandler`               | `onDone` | `onError`              | Rethrown; Restate retries the handler |
+| XState `createAsyncLogic`   | `onDone` | `onError`              | `onError` (no retry)                  |
 
 Use a `TerminalError` for a permanent business or input failure that retrying
 cannot fix. Throw an ordinary error for a transient operational failure only
 when you passed `{ retry }` or you are in a `fromHandler`.
 
-### Vanilla XState `fromPromise`
+### XState `createAsyncLogic`
 
-Ordinary XState promise actors remain supported and receive no Restate context.
-They run through the XState actor lifecycle but still inside `ctx.run`, so their
-result is journaled exactly-once. Any rejection is normalized to `onError` with
-the original `{ name, message }` preserved; it is not retried — behaviourally the
-same as a bare `fromPromise`. Because the object is locked while the actor runs,
-prefer this library's `fromPromise` (so you can add `{ retry }`) or `fromHandler`
-over a vanilla actor whenever the work can fail transiently; vanilla actors also
-receive `{ input, signal, self, system, emit }`, but only `input` is meaningful
-here — the rest are no-ops in the stateless-between-requests model.
+Ordinary XState v6 promise actors created with `createAsyncLogic` remain
+supported and receive no Restate context. They run through the XState actor
+lifecycle but still inside `ctx.run`, so their result is journaled for replay.
+Any rejection is normalized to `onError` with the original `{ name, message }`
+preserved; it is not retried — behaviourally the same as a bare `fromPromise`.
+Prefer this library's `fromPromise` (so you can add `{ retry }`) or `fromHandler`
+whenever the work can fail transiently. `createAsyncLogic` actors also receive
+`{ input, signal, self, system, emit }`, but only `input` is meaningful here —
+the rest are no-ops in the stateless-between-requests model.
 
 ### Concurrent actors
 
@@ -647,26 +723,26 @@ The value must be finite and non-negative. `0` requests immediate cleanup.
 This table describes the behavior implemented and covered by tests in this
 repository, not every feature available in XState itself.
 
-| Pattern                                            | Status                 | Notes                                                        |
-| -------------------------------------------------- | ---------------------- | ------------------------------------------------------------ |
-| Compound and parallel states                       | Supported              | One full macrostep is persisted per event                    |
-| Guards, `assign`, `always`, immediate `raise`      | Supported              | Resolved during pure transition computation                  |
-| Final output and tags                              | Supported              | Exposed in returned snapshots                                |
-| Shallow and deep history                           | Supported              | State-node references are serialized as IDs                  |
-| Promise `invoke` and `spawn`                       | Supported              | `fromPromise`/`fromHandler`; all run inside `ctx.run`        |
-| Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                           |
-| Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance             |
-| `enq.sendTo` (self / child / parent)               | Supported targets only | Self, known child, and parent routing                        |
-| `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                       |
-| `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                                |
-| `enq.stop(ref)` / invoke exit                      | Supported              | Stopped by explicit stop or when the invoking state exits    |
-| `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`                     |
-| Ingress validation from `machine.schemas`          | Integration feature    | Real schemas validate/coerce ingress and appear in discovery |
-| Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone      |
-| Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed               |
-| Callback actors (`createCallbackLogic`)            | **Not supported**      | No long-lived in-process actor exists                        |
-| Observable actors and other long-lived actor logic | Not guaranteed         | Only tested actor patterns should be relied upon             |
-| Arbitrary actor-system addressing                  | **Not supported**      | Routing is limited to self, parent, and known children       |
+| Pattern                                            | Status                 | Notes                                                         |
+| -------------------------------------------------- | ---------------------- | ------------------------------------------------------------- |
+| Compound and parallel states                       | Supported              | One full macrostep is persisted per event                     |
+| Guards, `assign`, `always`, immediate `raise`      | Supported              | Resolved during pure transition computation                   |
+| Final output and tags                              | Supported              | Exposed in returned snapshots                                 |
+| Shallow and deep history                           | Supported              | State-node references are serialized as IDs                   |
+| Promise `invoke` and `spawn`                       | Supported              | Out-of-band; actor kinds have distinct journaling/retry rules |
+| Concurrent promise invokes                         | Supported              | Completion order is not guaranteed                            |
+| Machine `invoke` and `spawn`                       | Supported              | Each child becomes its own keyed object instance              |
+| `enq.sendTo` (self / child / parent)               | Supported targets only | Self, known child, and parent routing                         |
+| `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                        |
+| `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                                 |
+| `enq.stop(ref)` / invoke exit                      | Supported              | Stopped by explicit stop or when the invoking state exits     |
+| `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`                      |
+| Ingress validation from `machine.schemas`          | Integration feature    | Real schemas validate/coerce ingress and appear in discovery  |
+| Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone       |
+| Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed                |
+| Callback actors (`createCallbackLogic`)            | **Not supported**      | No long-lived in-process actor exists                         |
+| Observable actors and other long-lived actor logic | Not guaranteed         | Only tested actor patterns should be relied upon              |
+| Arbitrary actor-system addressing                  | **Not supported**      | Routing is limited to self, parent, and known children        |
 
 The custom-action limitation is especially important. An arbitrary effect
 enqueued as `enq(sendEmail)` may type-check in XState, but this integration does
@@ -783,8 +859,8 @@ concurrency, timers, awakeables, retries, or object-to-object delivery.
 Check which factory was used, whether the promise resolves, and whether its
 `onDone`/`onError` transitions exist. An ordinary error is retried (rather than
 sent to `onError`) for a `fromPromise` with `{ retry }` or a `fromHandler`; a
-`fromPromise` without `{ retry }` and vanilla actors instead route any error to
-`onError`.
+`fromPromise` without `{ retry }` and ordinary XState actors instead route any
+error to `onError`.
 
 ### A named action did nothing
 
@@ -1037,22 +1113,25 @@ ingress-private `executeActor` handler. `runActor` resolves named actor sources
 from machine implementations, then dispatches by kind — one runner per kind:
 
 - `promise`: a ctx-less `fromPromise`. Without a `retry` policy it shares a
-  `runOnce` wrapper with vanilla actors — the body runs once inside `ctx.run` and
-  a rejection is captured as the run's result (not rethrown), so `ctx.run` never
-  retries an application error, while a genuine infrastructure crash is still
-  retried. (Vanilla actors reach `runOnce` the same way, differing only in the
-  body: they go through XState `createActor`/`toPromise`, whereas a `fromPromise`
-  calls its creator directly.) With a `retry` policy the body instead runs inside
-  `ctx.run` under that `RetryPolicy`: a non-terminal rejection is retried; a
-  `TerminalError` or an exhausted policy fails terminally.
+  `runOnce` wrapper with ordinary XState actors — the body runs once inside
+  `ctx.run` and a rejection is captured as the run's result (not rethrown), so
+  `ctx.run` never retries an application error, while a genuine infrastructure
+  crash is still retried. (`createAsyncLogic` and other ordinary actors reach
+  `runOnce` the same way, differing only in the body: they go through XState
+  `createActor`/`toPromise`, whereas a `fromPromise` calls its creator directly.)
+  With a `retry` policy the body instead runs inside `ctx.run` under that
+  `RetryPolicy`: a non-terminal rejection is retried; a `TerminalError` or an
+  exhausted policy fails terminally.
 - `handler`: run the creator directly with `{ input, ctx }` (no `ctx.run`
   wrapper — that would be illegal nested journaling); convert `TerminalError` to
   an error outcome and rethrow anything else so Restate retries the invocation.
 
 All paths normalize errors to plain `{ name, message }` data before that error is
-persisted or crosses an object boundary. Because every actor result is journaled
-by `ctx.run` (except `handler`, which owns `ctx` and journals its own work), a
-side effect executes exactly once and is replay-safe.
+persisted or crosses an object boundary. A completed `ctx.run` outcome is
+journaled and reused on replay; `handler` actors instead own the context and
+journal their operations individually. Retry attempts and failures between an
+external side effect and recording its outcome still require the usual
+idempotency discipline.
 
 Every promise start gets a durable random execution ID. The shared actor handler
 returns its result to the same keyed object through one of two explicit,
@@ -1171,7 +1250,7 @@ fresh execution, test probes, migrations, and version upgrades.
 The parent-aware inert XState scope and action decoding currently depend on
 XState internal shapes. In particular, the integration recognizes XState's
 internal action type strings and fabricates inert actor references for routing.
-That is why XState is pinned exactly to `5.32.4`.
+That is why XState is pinned exactly to `6.0.0-alpha.21`.
 
 For an XState upgrade:
 
@@ -1241,9 +1320,9 @@ High-value invariants to preserve include:
 - concurrent invokes cannot overwrite each other's context updates;
 - subscription is established before an optional triggering event;
 - a `fromPromise` with `{ retry }` and `fromHandler` actor errors retry, while a
-  `fromPromise` without `{ retry }` and vanilla actor errors reach `onError`;
-  terminal errors always reach `onError`;
-  and
+  `fromPromise` without `{ retry }` and ordinary XState actor errors reach
+  `onError`;
+- terminal actor errors always reach `onError`; and
 - every durable scenario behaves the same under forced replay.
 
 # Appendix A: API reference
