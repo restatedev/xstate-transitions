@@ -2,12 +2,15 @@
 
 ### What
 
-This is an experiment to use the pure transition api with restate,
-as described here https://stately.ai/docs/machines#transitioning-state
+`@restatedev/xstate` runs [XState](https://stately.ai/) state machines as durable
+[Restate](https://restate.dev/) virtual objects: each machine instance is a
+virtual object whose durable state _is_ the machine snapshot, persisted and
+rehydrated on every request.
 
-This largely follows this structure:
-
-https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570
+It is built on XState's
+[pure transition API](https://stately.ai/docs/machines#transitioning-state) and
+follows the structure of XState's
+[transition tests](https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570).
 
 > [!NOTE]
 > This integration targets **XState v6** (currently `6.0.0-alpha.21`). Because it
