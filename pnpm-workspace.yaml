@@ -14,7 +14,7 @@ catalog:
   "@restatedev/restate-sdk": ^1.16.2
   "@restatedev/restate-sdk-clients": 1.16.2
   "@restatedev/restate-sdk-testcontainers": 1.16.2
-  xstate: ^6.0.0-alpha.21
+  xstate: 6.0.0-alpha.22
 
 minimumReleaseAgeExclude:
   - "@publint/pack@0.1.6"

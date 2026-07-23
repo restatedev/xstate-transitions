@@ -16,7 +16,7 @@ catalogs:
       specifier: 1.16.2
       version: 1.16.2
     xstate:
-      specifier: ^6.0.0-alpha.21
+      specifier: 6.0.0-alpha.22
       version: 6.0.0-alpha.22
 
 importers:
