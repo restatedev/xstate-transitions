@@ -222,20 +222,18 @@ function interpretActions(
     if (action.type === "@xstate.spawn") {
       spawned.set(action.id, action);
     } else if (action.type === "@xstate.stop") {
-      // Context-held refs are canonicalized before the transition, but retain
-      // the explicit id as a version-independent signal: some XState versions
-      // remove the child from the snapshot while others also emit this action.
+      // Context-held refs are canonicalized before the transition. Retain the
+      // explicit id so the emitted stop action tears down the durable child.
       const stoppedId = action.actor?.id;
       if (stoppedId !== undefined) stoppedIds.add(stoppedId);
     }
   }
 
-  // 1. Stop persisted actors. Across supported v6 alphas, an exited invoke
-  //    either simply disappears from `snapshot.children` or also emits a stop
-  //    action. A reentered actor stays in children but is re-spawned this step,
-  //    so a fresh spawn also implies stopping the prior incarnation. Stopping
-  //    here removes it from the active sets; step 2 re-adds a reentered actor as
-  //    a start (stop-then-start).
+  // 1. Stop persisted actors. An exited invoke disappears from
+  //    `snapshot.children` and emits a stop action. A reentered actor stays in
+  //    children but is re-spawned this step, so a fresh spawn also implies
+  //    stopping the prior incarnation. Stopping here removes it from the active
+  //    sets; step 2 re-adds a reentered actor as a start (stop-then-start).
   const liveChildren = childIdsOf(snapshot);
   const isStopped = (id: string): boolean =>
     !liveChildren.has(id) || spawned.has(id) || stoppedIds.has(id);

@@ -13,7 +13,7 @@ follows the structure of XState's
 [transition tests](https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570).
 
 > [!NOTE]
-> This integration targets **XState v6** (`^6.0.0-alpha.21`). It depends on
+> This integration targets **XState v6** (`6.0.0-alpha.22`). It depends on
 > XState's pure-transition internals, so new prereleases are validated by the
 > full normal and forced-replay test suites.
 > Machines use the v6 authoring model (inline `(args, enq) => …` transitions,

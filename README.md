@@ -5,7 +5,7 @@ Run XState v6 **pure-transition** machines as durable
 the machine snapshot _as_ the durable state.
 
 > [!NOTE]
-> This integration targets **XState v6** (`^6.0.0-alpha.21`). It depends on
+> This integration targets **XState v6** (`6.0.0-alpha.22`). It depends on
 > XState's pure-transition internals, so new prereleases are validated by the
 > full normal and forced-replay test suites.
 
