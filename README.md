@@ -12,7 +12,7 @@ the machine snapshot _as_ the durable state.
 ## Getting started
 
 ```sh
-pnpm add @restatedev/xstate@alpha @restatedev/restate-sdk xstate@6.0.0-alpha.21 zod
+pnpm add @restatedev/xstate@alpha @restatedev/restate-sdk xstate@6.0.0-alpha.22 zod
 pnpm add --save-dev tsx
 ```
 
