@@ -73,6 +73,7 @@ import type {
   HandlerContext,
   InitRequest,
   MachineDefinition,
+  MachineInternalVirtualObject,
   MachineObjectOptions,
   MachineVirtualObject,
   ScheduledEvent,
@@ -140,7 +141,7 @@ export function createMachineObject<
   const runtime = new MachineRuntime(name, machine, finalStateTTL);
   const handlers = new MachineHandlers(runtime, eventSchema);
 
-  return restate.object({
+  const definition = restate.object({
     name,
     description: "Durable XState machine instances backed by Restate.",
     handlers: {
@@ -364,9 +365,16 @@ export function createMachineObject<
         (context: restate.ObjectContext, request: CleanupFinalStateRequest) =>
           handlers.cleanupFinalState(context, request),
       ),
-    } satisfies MachineVirtualObject<M>,
+    } satisfies MachineInternalVirtualObject<M>,
     options: objectOptions,
   });
+
+  // Internal ingress-private handlers are deliberately omitted from the
+  // definition returned to application code.
+  return definition as restate.VirtualObjectDefinition<
+    P,
+    MachineVirtualObject<M>
+  >;
 }
 
 /** Immutable dependencies shared by every handler in one object definition. */
@@ -474,7 +482,7 @@ class MachineHandlers<M extends AnyStateMachine> {
         : parsePublicEvent(this.eventSchema, request.event);
     const { id, promise } = context.awakeable<ReturnedSnapshot>();
 
-    const subscriber = context.objectClient<MachineVirtualObject>(
+    const subscriber = context.objectClient<MachineInternalVirtualObject>(
       this.runtime.self,
       context.key,
     );
@@ -484,7 +492,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     });
 
     if (event !== undefined) {
-      const sender = context.objectSendClient<MachineVirtualObject>(
+      const sender = context.objectSendClient<MachineInternalVirtualObject>(
         this.runtime.self,
         context.key,
       );
@@ -565,7 +573,7 @@ class MachineHandlers<M extends AnyStateMachine> {
       return;
     }
 
-    const sender = context.objectSendClient<MachineVirtualObject>(
+    const sender = context.objectSendClient<MachineInternalVirtualObject>(
       this.runtime.self,
       entry.targetKey,
     );
@@ -578,7 +586,7 @@ class MachineHandlers<M extends AnyStateMachine> {
   ): Promise<void> {
     const machine = this.runtime.resolveMachine(await getMachineId(context));
     const outcome = await runActor(machine, request.params, context);
-    const sender = context.objectSendClient<MachineVirtualObject>(
+    const sender = context.objectSendClient<MachineInternalVirtualObject>(
       this.runtime.self,
       context.key,
     );

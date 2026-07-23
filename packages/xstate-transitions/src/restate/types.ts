@@ -149,6 +149,12 @@ export interface MachineVirtualObject<
     context: ObjectContext,
     request: SubscribeRequest,
   ) => Promise<void>;
+}
+
+/** @internal The complete handler surface used by the Restate runtime. */
+export interface MachineInternalVirtualObject<
+  M extends AnyStateMachine = AnyStateMachine,
+> extends MachineVirtualObject<M> {
   deliverEvent: (
     context: ObjectContext,
     event: AnyEventObject,
@@ -180,7 +186,7 @@ export interface MachineVirtualObject<
 /** A reference to this virtual object's definition, used to build clients. */
 export type MachineDefinition = VirtualObjectDefinition<
   string,
-  MachineVirtualObject
+  MachineInternalVirtualObject
 >;
 
 /** The bundle of state an effect executor needs to act against Restate. */

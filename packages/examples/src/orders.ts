@@ -34,10 +34,7 @@
 import * as restate from "@restatedev/restate-sdk";
 import { setup, types } from "xstate";
 import { z } from "zod";
-import {
-  createMachineObject,
-  fromHandler,
-} from "@restatedev/xstate-transitions";
+import { createMachineObject, fromHandler } from "@restatedev/xstate";
 
 const OrderInput = z.object({
   sku: z.string(),

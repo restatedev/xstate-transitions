@@ -26,10 +26,7 @@
 
 import { setup, types } from "xstate";
 import { z } from "zod";
-import {
-  createMachineObject,
-  fromPromise,
-} from "@restatedev/xstate-transitions";
+import { createMachineObject, fromPromise } from "@restatedev/xstate";
 
 const Lender = z.object({
   name: z.string(),

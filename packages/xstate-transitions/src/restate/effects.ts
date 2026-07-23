@@ -29,7 +29,7 @@ import {
 import type {
   ChildRecord,
   HandlerContext,
-  MachineVirtualObject,
+  MachineInternalVirtualObject,
   ScheduledEvent,
 } from "./types";
 
@@ -69,7 +69,7 @@ export async function executeEffects(
         const executionId = ctx.rand.uuidv4();
         actorExecutions[effect.params.id] = executionId;
         actorExecutionsChanged = true;
-        const sender = ctx.objectSendClient<MachineVirtualObject>(
+        const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
           self,
           ctx.key,
         );
@@ -86,7 +86,10 @@ export async function executeEffects(
         childrenChanged = true;
         actorExecutions[effect.childId] = executionId;
         actorExecutionsChanged = true;
-        const sender = ctx.objectSendClient<MachineVirtualObject>(self, key);
+        const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
+          self,
+          key,
+        );
         sender.initChild({
           machineId: effect.machineId,
           parentKey: ctx.key,
@@ -105,7 +108,7 @@ export async function executeEffects(
           delete actorExecutions[effect.childId];
           actorExecutionsChanged = true;
         }
-        const sender = ctx.objectSendClient<MachineVirtualObject>(
+        const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
           self,
           child.key,
         );
@@ -122,7 +125,10 @@ export async function executeEffects(
       case "send": {
         const key = resolveTarget(handler, effect.target, children);
         if (key === undefined) break;
-        const sender = ctx.objectSendClient<MachineVirtualObject>(self, key);
+        const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
+          self,
+          key,
+        );
         sender.deliverEvent(effect.event);
         break;
       }
@@ -137,7 +143,7 @@ export async function executeEffects(
           event: effect.event,
         };
         scheduledChanged = true;
-        const sender = ctx.objectSendClient<MachineVirtualObject>(
+        const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
           self,
           ctx.key,
         );
@@ -211,7 +217,10 @@ export async function reportTerminal(
   if (await wasReported(ctx)) return;
   markReported(ctx);
 
-  const parent = ctx.objectSendClient<MachineVirtualObject>(self, parentKey);
+  const parent = ctx.objectSendClient<MachineInternalVirtualObject>(
+    self,
+    parentKey,
+  );
   if (returned.status === "done") {
     parent.actorDone({
       actorId: invokeId,
@@ -238,7 +247,10 @@ export function maybeScheduleCleanup(
   if (returned.status !== "done") return;
   const token = ctx.rand.uuidv4();
   setCleanupToken(ctx, token);
-  const sender = ctx.objectSendClient<MachineVirtualObject>(self, ctx.key);
+  const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
+    self,
+    ctx.key,
+  );
   const options = restate.rpc.sendOpts<{ token: string }>({
     delay: finalStateTTL,
   });

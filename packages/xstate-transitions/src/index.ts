@@ -22,6 +22,8 @@ export type {
   MachineObjectOptions,
   MachineVirtualObject,
   StandardSchema,
+  StandardSchemaIssue,
+  StandardSchemaResult,
   SubscribeRequest,
   WaitForRequest,
 } from "./restate/types";

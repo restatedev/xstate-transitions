@@ -1,7 +1,7 @@
 # examples
 
 Runnable Restate services built on
-[`@restatedev/xstate-transitions`](../xstate-transitions). Every example is an
+[`@restatedev/xstate`](../xstate-transitions). Every example is an
 XState **v6** pure-transition machine exposed as a durable Restate virtual
 object, and all of them share one endpoint.
 
