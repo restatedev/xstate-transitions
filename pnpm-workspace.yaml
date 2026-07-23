@@ -3,7 +3,7 @@ packages:
 
 allowBuilds:
   cpu-features: false
-  esbuild: true
+  esbuild: false
   protobufjs: false
   ssh2: false
 

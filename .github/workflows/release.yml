@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  release:
+    needs: test
+    if: github.repository_owner == 'restatedev'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Inspect package version
+        id: inspect
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Releases must run from the main branch."
+            exit 1
+          fi
+
+          PACKAGE_NAME=$(node -p "require('./packages/xstate-transitions/package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./packages/xstate-transitions/package.json').version")
+          RELEASE_TAG="v$PACKAGE_VERSION"
+
+          if [ "$PACKAGE_NAME" != "@restatedev/xstate" ]; then
+            echo "Unexpected publishable package: $PACKAGE_NAME"
+            exit 1
+          fi
+
+          if [[ ! "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "Expected an alpha version, got: $PACKAGE_VERSION"
+            exit 1
+          fi
+
+          git fetch --tags --force
+
+          CREATE_TAG=false
+          SHOULD_RELEASE=true
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            TAG_COMMIT=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              SHOULD_RELEASE=false
+              echo "$RELEASE_TAG already points to $TAG_COMMIT; nothing to release."
+            else
+              echo "$RELEASE_TAG already points to this commit; repairing or retrying the release."
+            fi
+          else
+            CREATE_TAG=true
+            echo "New version detected: $PACKAGE_NAME@$PACKAGE_VERSION"
+          fi
+
+          {
+            echo "name=$PACKAGE_NAME"
+            echo "version=$PACKAGE_VERSION"
+            echo "tag=$RELEASE_TAG"
+            echo "create_tag=$CREATE_TAG"
+            echo "should_release=$SHOULD_RELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: steps.inspect.outputs.create_tag == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.inspect.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "$RELEASE_TAG" "$GITHUB_SHA" --message "Release $RELEASE_TAG"
+          git push origin "refs/tags/$RELEASE_TAG"
+
+      - name: Use Node.js 24 for publishing
+        if: steps.inspect.outputs.should_release == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Set up pnpm
+        if: steps.inspect.outputs.should_release == 'true'
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        if: steps.inspect.outputs.should_release == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and validate package
+        if: steps.inspect.outputs.should_release == 'true'
+        run: |
+          pnpm build
+          pnpm -r --if-present check:package
+
+      - name: Pack package
+        if: steps.inspect.outputs.should_release == 'true'
+        id: pack
+        env:
+          PACKAGE_NAME: ${{ steps.inspect.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.inspect.outputs.version }}
+        run: |
+          PACK_DIRECTORY="$RUNNER_TEMP/npm-package"
+          mkdir -p "$PACK_DIRECTORY"
+          pnpm --filter "$PACKAGE_NAME" pack --pack-destination "$PACK_DIRECTORY"
+
+          PACKAGE_TARBALL="$PACK_DIRECTORY/restatedev-xstate-$PACKAGE_VERSION.tgz"
+          if [ ! -f "$PACKAGE_TARBALL" ]; then
+            echo "Expected package tarball was not created: $PACKAGE_TARBALL"
+            exit 1
+          fi
+          echo "tarball=$PACKAGE_TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Check npm publication
+        if: steps.inspect.outputs.should_release == 'true'
+        id: npm
+        env:
+          PACKAGE_NAME: ${{ steps.inspect.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.inspect.outputs.version }}
+        run: |
+          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version --json >/dev/null 2>&1; then
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.npm.outputs.publish == 'true'
+        env:
+          PACKAGE_TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: npm publish "$PACKAGE_TARBALL" --tag alpha --access public
+
+      - name: Create GitHub prerelease
+        if: steps.inspect.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.inspect.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "GitHub release $RELEASE_TAG already exists."
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --target "$GITHUB_SHA" \
+              --title "Release $RELEASE_TAG" \
+              --generate-notes \
+              --prerelease
+          fi
