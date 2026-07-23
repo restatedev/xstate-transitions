@@ -1,10 +1,24 @@
 {
-  "name": "@restatedev/xstate-transitions",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@restatedev/xstate",
+  "version": "0.6.0-alpha.0",
   "type": "module",
   "description": "Run XState v6 pure-transition machines as durable Restate virtual objects",
   "license": "MIT",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "author": "Restate developers",
+  "email": "code@restate.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/restatedev/xstate-transitions.git",
+    "directory": "packages/xstate-transitions"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.cts",
@@ -36,6 +50,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "check:exports": "attw --pack .",
+    "check:api": "api-extractor run --local",
+    "check:package": "publint && pnpm check:exports && pnpm check:api",
+    "prepublishOnly": "pnpm -w verify",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "peerDependencies": {

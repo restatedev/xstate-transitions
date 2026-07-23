@@ -25,7 +25,7 @@
 
 import { setup, types } from "xstate";
 import { z } from "zod";
-import { createMachineObject } from "@restatedev/xstate-transitions";
+import { createMachineObject } from "@restatedev/xstate";
 
 const Bid = z.object({
   carId: z.string(),

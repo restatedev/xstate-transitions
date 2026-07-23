@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Runnable Restate examples for @restatedev/xstate-transitions",
+  "description": "Runnable Restate examples for @restatedev/xstate",
   "license": "MIT",
   "scripts": {
     "dev": "tsx watch ./src/index.ts",
@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@restatedev/restate-sdk": "catalog:",
-    "@restatedev/xstate-transitions": "workspace:*",
+    "@restatedev/xstate": "workspace:*",
     "xstate": "catalog:",
     "zod": "^4.4.3"
   }

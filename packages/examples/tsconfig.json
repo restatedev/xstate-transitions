@@ -3,7 +3,7 @@
   "compilerOptions": {
     "noEmit": true,
     "paths": {
-      "@restatedev/xstate-transitions": ["../xstate-transitions/src/index.ts"]
+      "@restatedev/xstate": ["../xstate-transitions/src/index.ts"]
     }
   },
   "include": ["src"]

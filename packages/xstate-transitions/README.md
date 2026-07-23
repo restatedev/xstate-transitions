@@ -1,4 +1,4 @@
-# xstate-transitions
+# @restatedev/xstate
 
 ### What
 

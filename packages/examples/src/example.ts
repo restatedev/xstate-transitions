@@ -11,10 +11,7 @@
 
 import { setup, types } from "xstate";
 import { z } from "zod";
-import {
-  createMachineObject,
-  fromPromise,
-} from "@restatedev/xstate-transitions";
+import { createMachineObject, fromPromise } from "@restatedev/xstate";
 
 async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {

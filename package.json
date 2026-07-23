@@ -1,34 +1,41 @@
 {
-  "name": "xstate-transitions",
+  "name": "@restatedev/xstate-workspace",
   "version": "0.0.0",
   "private": true,
-  "description": "Run XState v5 pure-transition machines as durable Restate virtual objects (workspace root)",
+  "description": "Run XState v6 pure-transition machines as durable Restate virtual objects (workspace root)",
   "license": "MIT",
-  "packageManager": "pnpm@10.12.4",
+  "packageManager": "pnpm@11.16.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=11"
+  },
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --filter examples dev",
     "test": "pnpm -r test",
-    "test:unit": "pnpm --filter @restatedev/xstate-transitions test:unit",
-    "test:e2e": "pnpm --filter @restatedev/xstate-transitions test:e2e",
+    "test:unit": "pnpm --filter @restatedev/xstate test:unit",
+    "test:e2e": "pnpm --filter @restatedev/xstate test:e2e",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
     "lint:fix": "pnpm -r lint:fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "clean": "pnpm -r clean",
-    "verify": "pnpm format:check && pnpm -r typecheck && pnpm -r lint && pnpm -r build && pnpm -r test"
+    "verify": "pnpm format:check && pnpm -r typecheck && pnpm -r lint && pnpm -r build && pnpm -r --if-present check:package && pnpm -r test"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "^10.0.1",
+    "@microsoft/api-extractor": "^7.58.12",
     "@types/node": "^24.13.3",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
-    "prettier": "^3.9.5",
-    "tsdown": "^0.22.4",
+    "prettier": "^3.9.6",
+    "publint": "^0.3.22",
+    "tsdown": "^0.22.13",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.64.0",
-    "vitest": "^3.2.7"
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
   }
 }
