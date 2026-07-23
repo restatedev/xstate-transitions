@@ -71,6 +71,33 @@ const restartableParent = setup({
   },
 });
 
+const stoppableChild = createMachine({ id: "stoppable-child" });
+
+const explicitStopParent = setup({
+  actorSources: { child: stoppableChild },
+  schemas: {
+    context: types<{ ref: unknown; stopped: boolean }>(),
+  },
+}).createMachine({
+  id: "explicit-stop-parent",
+  context: { ref: undefined, stopped: false },
+  initial: "running",
+  states: {
+    running: {
+      entry: (_, enq) => ({
+        context: { ref: enq.spawn(stoppableChild, { id: "kid" }) },
+      }),
+      on: {
+        STOP: ({ context }, enq) => {
+          enq.stop(context.ref as never);
+          return { target: "stopped", context: { stopped: true } };
+        },
+      },
+    },
+    stopped: {},
+  },
+});
+
 describeE2E("Lifecycle regressions", (createActor) => {
   it(
     "delivers every unnamed zero-delay sendTo(self) event",
@@ -102,6 +129,23 @@ describeE2E("Lifecycle regressions", (createActor) => {
       await actor.send({ type: "RESTART" });
       await eventually(() => actor.snapshot()).toMatchObject({
         context: { readyCount: 2 },
+      });
+    },
+  );
+
+  it(
+    "stops a context-held child ref after durable rehydration",
+    { timeout: 60_000 },
+    async () => {
+      using actor = await createActor<{
+        value: string;
+        context: { stopped: boolean };
+      }>({ machine: explicitStopParent });
+
+      await actor.send({ type: "STOP" });
+      expect(await actor.snapshot()).toMatchObject({
+        value: "stopped",
+        context: { stopped: true },
       });
     },
   );

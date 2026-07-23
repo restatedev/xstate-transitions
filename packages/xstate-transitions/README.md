@@ -13,9 +13,9 @@ follows the structure of XState's
 [transition tests](https://github.com/statelyai/xstate/blob/main/packages/core/test/transition.test.ts#L480,L570).
 
 > [!NOTE]
-> This integration targets **XState v6** (currently `6.0.0-alpha.21`). Because it
-> depends on XState's pure-transition internals, the version is pinned exactly;
-> XState v6 is still in alpha, so treat an upgrade as an integration change.
+> This integration targets **XState v6** (`^6.0.0-alpha.21`). It depends on
+> XState's pure-transition internals, so new prereleases are validated by the
+> full normal and forced-replay test suites.
 > Machines use the v6 authoring model (inline `(args, enq) => …` transitions,
 > `schemas`, `enq.sendTo`/`enq.raise`), not the v5 action creators.
 

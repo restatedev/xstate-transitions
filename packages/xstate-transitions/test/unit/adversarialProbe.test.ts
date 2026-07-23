@@ -289,7 +289,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     );
   });
 
-  it("removes an exited invoke's child from children without a stop action", () => {
+  it("removes an exited invoke's child across supported stop-action shapes", () => {
     const child = createMachine({ id: "teardown-child" });
     const parent = setup({ actorSources: { child } }).createMachine({
       id: "teardown-parent",
@@ -307,10 +307,10 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     const [next, actions] = transition(parent, snapshot, {
       type: "CANCEL",
     } as never);
-    // v6 does not emit a stop action on invoke exit; the child simply disappears
-    // from the post-transition snapshot.children. The integration derives the
-    // stopChild effect from that diff instead.
+    // alpha.21 only removes the child; alpha.22 also emits @xstate.stop. The
+    // integration supports both and derives one stopChild effect either way.
     expect(next.children.kid).toBeUndefined();
-    expect(builtIn(actions, "@xstate.stop")).toBeUndefined();
+    const stop = builtIn(actions, "@xstate.stop");
+    if (stop !== undefined) expect(stop.actor?.id).toBe("kid");
   });
 });
