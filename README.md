@@ -9,6 +9,56 @@ the machine snapshot _as_ the durable state.
 > depends on XState's pure-transition internals the version is pinned exactly, and
 > XState v6 is still in alpha — treat an upgrade as an integration change.
 
+## Getting started
+
+```sh
+pnpm add @restatedev/xstate@alpha @restatedev/restate-sdk xstate@6.0.0-alpha.21 zod
+pnpm add --save-dev tsx
+```
+
+Create an `index.ts`:
+
+```ts
+import * as restate from "@restatedev/restate-sdk";
+import { createMachineObject } from "@restatedev/xstate";
+import { setup, types } from "xstate";
+import { z } from "zod";
+
+const IncrementEvent = z.object({
+  type: z.literal("INCREMENT"),
+  by: z.number().int().positive().default(1),
+});
+
+const counterMachine = setup({
+  schemas: {
+    input: z.object({ initialCount: z.number().int().default(0) }),
+    events: { INCREMENT: IncrementEvent },
+    context: types<{ count: number }>(),
+  },
+}).createMachine({
+  id: "counter",
+  context: ({ input }) => ({ count: input.initialCount }),
+  initial: "active",
+  states: {
+    active: {
+      on: {
+        INCREMENT: ({ context, event }) => ({
+          context: { count: context.count + event.by },
+        }),
+      },
+    },
+  },
+});
+
+const counter = createMachineObject("counter", counterMachine);
+
+restate.serve({ services: [counter] });
+```
+
+Run `pnpm tsx index.ts`, then register `http://localhost:9080` with Restate. See the
+[library README](packages/xstate-transitions/README.md) and
+[examples](packages/examples) for schemas, durable actors, and complete setup.
+
 This is a pnpm workspace:
 
 - **[`packages/xstate-transitions`](packages/xstate-transitions)** — the library.
