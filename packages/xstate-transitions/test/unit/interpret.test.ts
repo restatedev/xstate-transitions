@@ -20,7 +20,7 @@
 import { describe, expect, it } from "vitest";
 import { createAsyncLogic, createMachine, setup, types } from "xstate";
 import { initialStep, resumeStep } from "../../src/xstate/interpret";
-import type { Effect } from "../../src/xstate/types";
+import type { Effect, StoredState } from "../../src/xstate/types";
 
 const byKind = (effects: Effect[], kind: Effect["kind"]) =>
   effects.filter((effect) => effect.kind === kind);
@@ -567,10 +567,9 @@ describe("resumeStep() — events and routing", () => {
   });
 
   it("stops a child explicitly stopped via a context-held ref after rehydration", () => {
-    // The stored ref is a JSON-revived object, so it no longer matches the
-    // injected stub and XState's identity-based removal leaves the child in
-    // `snapshot.children`. The explicit @xstate.stop action must still tear it
-    // down, otherwise the child leaks and its later completion is accepted.
+    // Restate journals the step as JSON, turning the live actor into XState's
+    // `{ "xstate$$type": 1, id }` marker. It must be canonicalized to the
+    // injected child stub before XState applies its ownership check.
     const child = createMachine({
       id: "child",
       initial: "a",
@@ -594,8 +593,9 @@ describe("resumeStep() — events and routing", () => {
       },
     });
     const created = initialStep(parent, { isChild: false });
+    const stored = JSON.parse(JSON.stringify(created.nextState)) as StoredState;
     const stopped = resumeStep(parent, {
-      stored: created.nextState,
+      stored,
       event: { type: "STOP" },
       isChild: false,
       knownChildIds: ["kid"],

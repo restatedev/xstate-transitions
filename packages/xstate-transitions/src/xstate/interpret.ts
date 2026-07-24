@@ -72,9 +72,9 @@ export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
  * Apply an event to an existing, persisted instance.
  *
  * Rehydrates the stored snapshot, re-injects stub refs for already-started
- * children (so `sendTo`/`forwardTo` targeting them resolve), runs one full
- * macrostep for the event, and returns the next persisted state plus effects.
- * Pure, like {@link initialStep}.
+ * children, canonicalizes serialized context-held refs to those same stubs,
+ * runs one full macrostep for the event, and returns the next persisted state
+ * plus effects. Pure, like {@link initialStep}.
  *
  * @param machine - The state machine this instance runs.
  * @param input - The stored state, the event to apply, whether this instance is
@@ -134,16 +134,71 @@ function finish(
   };
 }
 
+interface MutableSnapshot {
+  context: unknown;
+  children: Record<string, unknown>;
+}
+
 // resolveState drops live children; re-inject stub refs for known children so
-// sendTo/forwardTo targeting them resolve to routable actions.
+// sendTo/forwardTo targeting them resolve to routable actions. Actor refs stored
+// in context serialize to `{ "xstate$$type": 1, id }`; replace those markers
+// with the exact same stubs so XState's child ownership checks also succeed.
 function injectStubChildren(
   snapshot: AnyMachineSnapshot,
   knownChildIds: readonly string[],
 ): void {
-  const children = snapshot.children as Record<string, unknown>;
+  const mutable = snapshot as unknown as MutableSnapshot;
+  const children = mutable.children;
+  const refs = new Map<string, unknown>();
   for (const childId of knownChildIds) {
     children[childId] ??= stubChildRef(childId);
+    refs.set(childId, children[childId]);
   }
+  mutable.context = canonicalizeActorRefs(mutable.context, refs);
+}
+
+/** Find an XState actor id on either a serialized marker or a live ref. */
+function actorRefId(value: object): string | undefined {
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.id !== "string") return undefined;
+  if (candidate["xstate$$type"] === 1) return candidate.id;
+  if (candidate.ref === value && typeof candidate.send === "function") {
+    return candidate.id;
+  }
+  return undefined;
+}
+
+/** Recursively replace persisted actor refs without mutating user context. */
+function canonicalizeActorRefs(
+  value: unknown,
+  refs: ReadonlyMap<string, unknown>,
+): unknown {
+  if (typeof value !== "object" || value === null) return value;
+
+  const actorId = actorRefId(value);
+  if (actorId !== undefined && refs.has(actorId)) return refs.get(actorId);
+
+  if (Array.isArray(value)) {
+    let changed = false;
+    const result = value.map((item) => {
+      const next = canonicalizeActorRefs(item, refs);
+      changed ||= next !== item;
+      return next;
+    });
+    return changed ? result : value;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+
+  let changed = false;
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const next = canonicalizeActorRefs(item, refs);
+    changed ||= next !== item;
+    result[key] = next;
+  }
+  return changed ? result : value;
 }
 
 function interpretActions(
@@ -167,23 +222,18 @@ function interpretActions(
     if (action.type === "@xstate.spawn") {
       spawned.set(action.id, action);
     } else if (action.type === "@xstate.stop") {
-      // XState removes a stopped actor from `snapshot.children` by ref identity.
-      // After snapshot rehydration a stop whose ref came from context (a
-      // JSON-revived object) no longer matches the injected stub child, so that
-      // removal silently no-ops and the children diff below would miss it. Honor
-      // the explicit stop by id so the actor is torn down regardless.
+      // Context-held refs are canonicalized before the transition. Retain the
+      // explicit id so the emitted stop action tears down the durable child.
       const stoppedId = action.actor?.id;
       if (stoppedId !== undefined) stoppedIds.add(stoppedId);
     }
   }
 
-  // 1. Stop persisted actors. Unlike v5, v6 does not emit a stop action when an
-  //    invoke's state is exited — the actor simply disappears from the
-  //    post-transition `snapshot.children`. A reentered actor stays in children
-  //    but is re-spawned this step, so a fresh spawn also implies stopping the
-  //    prior incarnation. An explicit `@xstate.stop` is honored even when the
-  //    child is still listed (see above). Stopping here removes it from the
-  //    active sets; step 2 re-adds a reentered actor as a start (stop-then-start).
+  // 1. Stop persisted actors. An exited invoke disappears from
+  //    `snapshot.children` and emits a stop action. A reentered actor stays in
+  //    children but is re-spawned this step, so a fresh spawn also implies
+  //    stopping the prior incarnation. Stopping here removes it from the active
+  //    sets; step 2 re-adds a reentered actor as a start (stop-then-start).
   const liveChildren = childIdsOf(snapshot);
   const isStopped = (id: string): boolean =>
     !liveChildren.has(id) || spawned.has(id) || stoppedIds.has(id);

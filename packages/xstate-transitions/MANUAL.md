@@ -5,11 +5,9 @@ objects. The first half is a user guide; the second half describes the
 implementation, durability model, and testing strategy.
 
 > [!IMPORTANT]
-> This repository is currently an experiment rather than a published package.
-> Its integration layer also depends on XState internals and therefore pins
-> XState exactly — currently `6.0.0-alpha.21` (XState v6 is still in alpha).
-> Treat an XState upgrade as an integration change that requires the full test
-> suite.
+> The integration depends on XState internals and targets XState v6
+> `6.0.0-alpha.22`. Treat an XState upgrade as an integration change that
+> requires the full normal and forced-replay test suites.
 
 ## Contents
 
@@ -1250,7 +1248,8 @@ fresh execution, test probes, migrations, and version upgrades.
 The parent-aware inert XState scope and action decoding currently depend on
 XState internal shapes. In particular, the integration recognizes XState's
 internal action type strings and fabricates inert actor references for routing.
-That is why XState is pinned exactly to `6.0.0-alpha.21`.
+That is why XState is pinned to `6.0.0-alpha.22` and each new prerelease is
+validated before the lockfile advances.
 
 For an XState upgrade:
 

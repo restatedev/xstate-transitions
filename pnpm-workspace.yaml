@@ -8,13 +8,14 @@ allowBuilds:
   ssh2: false
 
 # Shared dependency versions referenced as `catalog:` in each package.
-# xstate is pinned exactly: the integration depends on xstate internals.
+# XState is pinned exactly because the integration depends on its internals.
 catalog:
   "@restatedev/restate-sdk": ^1.16.2
   "@restatedev/restate-sdk-clients": 1.16.2
   "@restatedev/restate-sdk-testcontainers": 1.16.2
-  xstate: 6.0.0-alpha.21
+  xstate: 6.0.0-alpha.22
 
 minimumReleaseAgeExclude:
   - "@publint/pack@0.1.6"
   - publint@0.3.22
+  - xstate@6.0.0-alpha.22

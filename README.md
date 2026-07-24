@@ -5,14 +5,14 @@ Run XState v6 **pure-transition** machines as durable
 the machine snapshot _as_ the durable state.
 
 > [!NOTE]
-> This integration targets **XState v6** (currently `6.0.0-alpha.21`). Because it
-> depends on XState's pure-transition internals the version is pinned exactly, and
-> XState v6 is still in alpha — treat an upgrade as an integration change.
+> This integration targets **XState v6** (`6.0.0-alpha.22`). It depends on
+> XState's pure-transition internals, so new prereleases are validated by the
+> full normal and forced-replay test suites.
 
 ## Getting started
 
 ```sh
-pnpm add @restatedev/xstate@alpha @restatedev/restate-sdk xstate@6.0.0-alpha.21 zod
+pnpm add @restatedev/xstate@alpha @restatedev/restate-sdk xstate@6.0.0-alpha.22 zod
 pnpm add --save-dev tsx
 ```
 
