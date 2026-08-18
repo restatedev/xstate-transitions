@@ -30,7 +30,7 @@ import { describeE2E } from "./harness";
 
 const machineFactory = (executor: () => Promise<void>) => {
   const taskMachine = setup({
-    actorSources: {
+    actors: {
       execute: fromHandler(async ({ ctx }) => {
         await ctx.run("Execute", async () => {
           await executor();
@@ -48,7 +48,7 @@ const machineFactory = (executor: () => Promise<void>) => {
   });
 
   return setup({
-    actorSources: { task: taskMachine },
+    actors: { task: taskMachine },
   }).createMachine({
     id: "delayedStarter",
     initial: "ready",

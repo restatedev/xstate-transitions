@@ -71,7 +71,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
                 },
               },
             },
-            hist: { type: "history", history: "deep" },
+            hist: { type: "history", history: "deep", target: "work" },
           },
         },
         paused: {
@@ -119,7 +119,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
 
       context: ({ input }: any) => ({ received: input }),
     });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "spawn-input-parent",
       context: { ref: undefined as unknown },
       entry: (_, enq) => ({
@@ -139,7 +139,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
 
   it("captures ordinary invoke input in its emitted @xstate.spawn action", () => {
     const child = createMachine({ id: "invoke-input-child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "invoke-input-parent",
       invoke: { id: "child", src: "child", input: { answer: 42 } },
     });
@@ -150,7 +150,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
 
   it("keeps an actor-ref sendTo routable after context JSON serialization", () => {
     const child = createMachine({ id: "ref-child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "ref-parent",
 
       context: { ref: undefined as any },
@@ -168,7 +168,10 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
       parent,
       jsonRoundTrip(toStored(snapshot as AnyMachineSnapshot)),
     ) as any;
-    rehydrated.children.child = stubChildRef("child");
+    rehydrated.children = {
+      ...rehydrated.children,
+      child: stubChildRef("child"),
+    };
     const [, actions] = transition(parent, rehydrated, {
       type: "SEND",
     } as never);
@@ -205,7 +208,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     );
     expect(builtIn(childActions, "@xstate.sendTo").target.id).toBe("#_parent");
 
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "scope-parent",
       invoke: { id: "child", src: "child" },
       on: {
@@ -219,7 +222,10 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
       parent,
       jsonRoundTrip(toStored(parentSnapshot as AnyMachineSnapshot)),
     ) as any;
-    rehydrated.children.child = stubChildRef("child");
+    rehydrated.children = {
+      ...rehydrated.children,
+      child: stubChildRef("child"),
+    };
     const [, forwardActions] = transition(parent, rehydrated, {
       type: "FORWARD",
     } as never);
@@ -228,7 +234,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
 
   it("routes a normalized vanilla-actor error through a message guard", async () => {
     const machine = setup({
-      actorSources: {
+      actors: {
         boom: createAsyncLogic({
           run: async () => {
             throw new Error("MATCH_ME");
@@ -269,7 +275,15 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     });
     if (outcome.status !== "error") throw new Error("Expected actor failure");
     const errorEvent = createNormalizedErrorActorEvent(spawn.id, outcome.error);
-    const [next] = transition(machine, snapshot, errorEvent as never);
+    const rehydrated = fromStored(
+      machine,
+      jsonRoundTrip(toStored(snapshot as AnyMachineSnapshot)),
+    ) as any;
+    rehydrated.children = {
+      ...rehydrated.children,
+      [spawn.id]: stubChildRef(spawn.id),
+    };
+    const [next] = transition(machine, rehydrated, errorEvent as never);
     expect(next).toMatchObject({ status: "done", value: "matched" });
   });
 
@@ -279,7 +293,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
       initial: "child",
       states: { child: {} },
     });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "duplicate",
       initial: "parent",
       states: { parent: { invoke: { id: "kid", src: "child" } } },
@@ -291,7 +305,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
 
   it("removes an exited invoke's child and emits a stop action", () => {
     const child = createMachine({ id: "teardown-child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "teardown-parent",
       initial: "running",
       states: {

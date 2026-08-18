@@ -23,7 +23,7 @@ export const workflow = setup({
       customer: string;
     }>(),
   },
-  actorSources: {
+  actors: {
     sendEmail: fromPromise(
       async ({ input }: { input: { customer: string } }) => {
         console.log("Sending email to", input.customer);

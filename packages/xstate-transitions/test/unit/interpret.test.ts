@@ -40,7 +40,7 @@ describe("initialStep()", () => {
 
   it("emits runPromise for a promise-actor invoke", () => {
     const machine = setup({
-      actorSources: { work: createAsyncLogic({ run: async () => 42 }) },
+      actors: { work: createAsyncLogic({ run: async () => 42 }) },
     }).createMachine({
       id: "m",
       initial: "run",
@@ -61,7 +61,7 @@ describe("initialStep()", () => {
       initial: "a",
       states: { a: {} },
     });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       initial: "run",
       states: { run: { invoke: { src: "child", id: "kid" } } },
@@ -79,7 +79,7 @@ describe("initialStep()", () => {
 
   it("carries invoke input into the startChild effect", () => {
     const child = createMachine({ id: "child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       invoke: { src: "child", id: "kid", input: { answer: 42 } },
     });
@@ -91,7 +91,7 @@ describe("initialStep()", () => {
 
   it("carries entry-spawn input into the startChild effect", () => {
     const child = createMachine({ id: "child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       context: { child: undefined as unknown },
       entry: (_, enq) => ({
@@ -117,7 +117,7 @@ describe("initialStep()", () => {
     const work = createAsyncLogic<number, { answer: number }>({
       run: async ({ input }) => input.answer,
     });
-    const parent = setup({ actorSources: { work } }).createMachine({
+    const parent = setup({ actors: { work } }).createMachine({
       id: "parent",
       context: { work: undefined as unknown },
       entry: (_, enq) => ({
@@ -140,7 +140,7 @@ describe("initialStep()", () => {
 
   it("emits two runPromise effects for two parallel invokes", () => {
     const machine = setup({
-      actorSources: {
+      actors: {
         a: createAsyncLogic({ run: async () => 1 }),
         b: createAsyncLogic({ run: async () => 2 }),
       },
@@ -158,7 +158,7 @@ describe("initialStep()", () => {
 
   it("isolates systemId registrations in the parent-aware child scope", () => {
     const grandchild = createMachine({ id: "grandchild" });
-    const child = setup({ actorSources: { grandchild } }).createMachine({
+    const child = setup({ actors: { grandchild } }).createMachine({
       id: "child",
       invoke: {
         src: "grandchild",
@@ -185,7 +185,7 @@ describe("initialStep()", () => {
       states: { a: {} },
     });
     const build = () =>
-      setup({ actorSources: { child } }).createMachine({
+      setup({ actors: { child } }).createMachine({
         id: "parent",
         initial: "run",
         states: { run: { invoke: { src: "child" } } },
@@ -209,7 +209,7 @@ describe("initialStep()", () => {
     // A transition that spawns then stops the same ref leaves it out of the
     // settled snapshot's children; the integration must not run its effect.
     const work = createAsyncLogic({ run: async () => "must-not-run" });
-    const machine = setup({ actorSources: { work } }).createMachine({
+    const machine = setup({ actors: { work } }).createMachine({
       id: "m",
       context: {},
       entry: (_, enq) => {
@@ -344,7 +344,7 @@ describe("resumeStep() — events and routing", () => {
       initial: "a",
       states: { a: { on: { PING: { target: "b" } } }, b: {} },
     });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       invoke: { src: "child", id: "kid" },
       on: {
@@ -376,7 +376,7 @@ describe("resumeStep() — events and routing", () => {
       initial: "a",
       states: { a: {} },
     });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       invoke: { src: "child", id: "kid" },
       on: {
@@ -433,7 +433,7 @@ describe("resumeStep() — events and routing", () => {
 
   it("does not re-start a child already known", () => {
     const child = createMachine({ id: "child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       invoke: { src: "child", id: "kid" },
     });
@@ -451,7 +451,7 @@ describe("resumeStep() — events and routing", () => {
 
   it("stops a persisted machine child when its invoke is exited", () => {
     const child = createMachine({ id: "child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       initial: "running",
       states: {
@@ -478,7 +478,7 @@ describe("resumeStep() — events and routing", () => {
 
   it("stops then restarts a re-entered invoke with the same child id", () => {
     const child = createMachine({ id: "child" });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       initial: "running",
       states: {
@@ -510,7 +510,7 @@ describe("resumeStep() — events and routing", () => {
 
   it("stops then restarts a re-entered promise with the same actor id", () => {
     const parent = setup({
-      actorSources: { work: createAsyncLogic({ run: async () => "done" }) },
+      actors: { work: createAsyncLogic({ run: async () => "done" }) },
     }).createMachine({
       id: "parent",
       initial: "running",
@@ -575,7 +575,7 @@ describe("resumeStep() — events and routing", () => {
       initial: "a",
       states: { a: {} },
     });
-    const parent = setup({ actorSources: { child } }).createMachine({
+    const parent = setup({ actors: { child } }).createMachine({
       id: "parent",
       context: { ref: undefined as unknown },
       initial: "running",

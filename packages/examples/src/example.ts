@@ -47,7 +47,7 @@ export const workflow = setup({
     }>(),
   },
 
-  actorSources: {
+  actors: {
     checkfunds: fromPromise(
       async ({
         input,

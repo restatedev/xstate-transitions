@@ -36,7 +36,7 @@ const vitalsWorkflow = setup({
       battery: null | { value: number };
     }>(),
   },
-  actorSources: {
+  actors: {
     checkTirePressure: fromPromise(async () => {
       console.log("Starting checkTirePressure");
       await delay(10);

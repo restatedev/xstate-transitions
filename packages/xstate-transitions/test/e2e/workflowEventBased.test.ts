@@ -31,7 +31,7 @@ interface PatientInfo {
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#event-based-service-invocation
 export const workflow = setup({
-  actorSources: {
+  actors: {
     MakeAppointmentAction: fromPromise(
       async ({ input }: { input: { patientInfo: PatientInfo } }) => {
         console.log("Making vet appointment for", input.patientInfo);

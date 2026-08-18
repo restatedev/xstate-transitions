@@ -31,7 +31,7 @@ const machine = createMachine({
       states: {
         one: { on: { NEXT: { target: "two" } } },
         two: {},
-        hist: { type: "history", history: "shallow" },
+        hist: { type: "history", history: "shallow", target: "one" },
       },
     },
     paused: { on: { RESUME: { target: "#hist.main.hist" } } },

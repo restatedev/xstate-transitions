@@ -22,7 +22,7 @@ import { fromHandler } from "../../src";
 import { describeE2E } from "./harness";
 
 const dateMachine = setup({
-  actorSources: {
+  actors: {
     // ctx-aware: reads the deterministic Restate clock, so it uses fromHandler.
     getCurrentDate: fromHandler(async ({ ctx }) => ctx.date.now()),
   },

@@ -35,7 +35,7 @@ export const workflow = setup({
       humidity: number | null;
     }>(),
   },
-  actorSources: {
+  actors: {
     produceReport: fromPromise(
       ({
         input,

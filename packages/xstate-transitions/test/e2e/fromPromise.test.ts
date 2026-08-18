@@ -33,7 +33,7 @@ const emailMachine = (
       input: types<{ customer: string }>(),
       context: types<{ customer: string }>(),
     },
-    actorSources: {
+    actors: {
       sendEmail: fromPromise<undefined, { customer: string }>(
         async ({ input }) => {
           await sendEmail(input.customer);

@@ -37,7 +37,7 @@ export const workflow = setup({
       customer: Customer;
     }>(),
   },
-  actorSources: {
+  actors: {
     callCreditCheckMicroservice: fromPromise(
       ({ input }: { input: { customer: Customer } }) => {
         console.log("calling credit check microservice", input);

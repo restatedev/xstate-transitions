@@ -31,7 +31,7 @@ const machineFactory = (sendEmail: (customer: string) => Promise<void>) =>
       input: types<{ customer: string }>(),
       context: types<{ customer: string }>(),
     },
-    actorSources: {
+    actors: {
       sendEmail: fromHandler<undefined, { customer: string }>(
         async ({ input, ctx }) => {
           await ctx.run("Sending email to", async () => {

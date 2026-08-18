@@ -62,7 +62,7 @@ describeE2E("Macrostep durability", (createActor) => {
             }>(),
           },
         },
-        actorSources: { echo },
+        actors: { echo },
       }).createMachine({
         id: "macrostep-journal",
         context: { round: 0, latest: [], delivered: [] },

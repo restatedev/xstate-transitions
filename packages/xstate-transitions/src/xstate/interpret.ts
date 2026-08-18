@@ -148,12 +148,15 @@ function injectStubChildren(
   knownChildIds: readonly string[],
 ): void {
   const mutable = snapshot as unknown as MutableSnapshot;
-  const children = mutable.children;
+  // XState alpha.40 freezes the empty `children` record produced by
+  // `resolveState`. Replace it with a mutable copy before restoring stubs.
+  const children = { ...mutable.children };
   const refs = new Map<string, unknown>();
   for (const childId of knownChildIds) {
     children[childId] ??= stubChildRef(childId);
     refs.set(childId, children[childId]);
   }
+  mutable.children = children;
   mutable.context = canonicalizeActorRefs(mutable.context, refs);
 }
 

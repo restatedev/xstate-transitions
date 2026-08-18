@@ -37,7 +37,7 @@ const cancelingChild = setup({}).createMachine({
     canceled: {
       type: "final",
       // The child's final entry sends an application event to the parent. It
-      // must reach the parent BEFORE the invoke's xstate.done.actor.* report, so
+      // must reach the parent BEFORE the invoke's xstate.done.actor report, so
       // the parent lands in `canceled`, not `completed`.
       entry: ({ parent }, enq) => {
         enq.sendTo(parent, { type: "CHILD_CANCELED" });
@@ -47,7 +47,7 @@ const cancelingChild = setup({}).createMachine({
 });
 
 const orderingParent = setup({
-  actorSources: { child: cancelingChild },
+  actors: { child: cancelingChild },
 }).createMachine({
   id: "parent",
   initial: "waiting",
@@ -80,7 +80,7 @@ const echoChild = setup({
   },
 });
 
-const inputParent = setup({ actorSources: { echo: echoChild } }).createMachine({
+const inputParent = setup({ actors: { echo: echoChild } }).createMachine({
   id: "input-parent",
   schemas: { context: types<{ childEcho: string | null }>() },
   context: { childEcho: null },
@@ -105,7 +105,7 @@ const inputParent = setup({ actorSources: { echo: echoChild } }).createMachine({
 // --- unhandled error cascade across virtual objects --------------------------
 
 const throwingChild = setup({
-  actorSources: {
+  actors: {
     boom: fromPromise(async () => {
       throw new Error("boom");
     }),
@@ -119,7 +119,7 @@ const throwingChild = setup({
 });
 
 const cascadeParent = setup({
-  actorSources: { child: throwingChild },
+  actors: { child: throwingChild },
 }).createMachine({
   id: "cascade-parent",
   initial: "run",
@@ -137,7 +137,7 @@ const worker = setup({}).createMachine({
 });
 
 const twoInvokesParent = setup({
-  actorSources: { worker },
+  actors: { worker },
 }).createMachine({
   id: "two-invokes",
   type: "parallel",

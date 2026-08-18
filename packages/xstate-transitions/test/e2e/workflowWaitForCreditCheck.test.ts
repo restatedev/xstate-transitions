@@ -44,7 +44,7 @@ const workflow = setup({
       start: types<{ customer: Customer }>(),
     },
   },
-  actorSources: {
+  actors: {
     callCreditCheckMicroservice: fromPromise(
       ({ input }: { input: { customer: Customer } }) =>
         Promise.resolve({

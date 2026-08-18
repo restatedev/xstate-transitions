@@ -25,9 +25,9 @@ import {
 } from "../../src/xstate/actors";
 
 describe("resolveReferencedActor", () => {
-  it("resolves a named actor via implementations", () => {
+  it("resolves a named actor via sources", () => {
     const work = createAsyncLogic({ run: async () => 1 });
-    const machine = setup({ actorSources: { work } }).createMachine({
+    const machine = setup({ actors: { work } }).createMachine({
       id: "m",
       invoke: { src: "work" },
     });
@@ -62,16 +62,18 @@ describe("normalizeError", () => {
 describe("done/error actor events", () => {
   it("builds a done event", () => {
     expect(createDoneActorEvent("w", { ok: 1 })).toEqual({
-      type: "xstate.done.actor.w",
+      type: "xstate.done.actor",
       output: { ok: 1 },
       actorId: "w",
+      sessionId: "w",
     });
   });
   it("builds a normalized error event", () => {
     expect(createErrorActorEvent("w", new Error("x"))).toEqual({
-      type: "xstate.error.actor.w",
+      type: "xstate.error.actor",
       error: { name: "Error", message: "x" },
       actorId: "w",
+      sessionId: "w",
     });
   });
 });

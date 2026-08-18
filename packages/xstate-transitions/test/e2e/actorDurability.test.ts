@@ -28,7 +28,7 @@ import { describeE2E } from "./harness";
 type CounterSnapshot = { status?: string; context: { result: number } };
 
 const counterMachine = (work: AnyActorLogic) =>
-  setup({ actorSources: { work } }).createMachine({
+  setup({ actors: { work } }).createMachine({
     id: "durability",
     initial: "running",
     context: { result: 0 },

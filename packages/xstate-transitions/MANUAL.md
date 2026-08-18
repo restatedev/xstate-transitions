@@ -6,7 +6,7 @@ implementation, durability model, and testing strategy.
 
 > [!IMPORTANT]
 > The integration depends on XState internals and targets XState v6
-> `6.0.0-alpha.22`. Treat an XState upgrade as an integration change that
+> `6.0.0-alpha.40`. Treat an XState upgrade as an integration change that
 > requires the full normal and forced-replay test suites.
 
 ## Contents
@@ -141,7 +141,7 @@ export const orderMachine = setup({
       CANCEL: z.object({}),
     },
   },
-  actorSources: {
+  actors: {
     reserveInventory,
   },
 }).createMachine({
@@ -639,7 +639,7 @@ child key:  order-123::payment
 ```
 
 Nested children extend the same pattern. The integration discovers child
-machine definitions recursively from `setup({ actorSources })` and direct
+machine definitions recursively from `setup({ actors })` and direct
 `invoke.src` references.
 
 Supported routing includes:
@@ -881,7 +881,7 @@ token and exits without sending the event.
 ### A child machine cannot be resolved
 
 Give every machine a unique explicit `id`, and make the child reachable through
-`setup({ actorSources })` or a direct `invoke.src` machine reference. Duplicate IDs
+`setup({ actors })` or a direct `invoke.src` machine reference. Duplicate IDs
 are rejected when the object definition is created.
 
 ### Behavior changed after upgrading XState
@@ -1150,7 +1150,7 @@ ignored. Public callers cannot inject these lifecycle events through `send`.
 At object-definition time, `buildRegistry` recursively visits:
 
 - the root machine;
-- machines in each machine's `implementations.actorSources`; and
+- machines in each machine's `sources.actors`; and
 - machine objects referenced directly by `invoke.src`.
 
 It indexes them by machine ID and rejects ambiguous duplicate IDs.
@@ -1248,7 +1248,7 @@ fresh execution, test probes, migrations, and version upgrades.
 The parent-aware inert XState scope and action decoding currently depend on
 XState internal shapes. In particular, the integration recognizes XState's
 internal action type strings and fabricates inert actor references for routing.
-That is why XState is pinned to `6.0.0-alpha.22` and each new prerelease is
+That is why XState is pinned to `6.0.0-alpha.40` and each new prerelease is
 validated before the lockfile advances.
 
 For an XState upgrade:

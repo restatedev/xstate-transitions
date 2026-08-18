@@ -23,7 +23,7 @@ import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 const machine = setup({
-  actorSources: {
+  actors: {
     boom: fromPromise(async () => {
       throw new Error("NOT_FOUND");
     }),

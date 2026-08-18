@@ -34,7 +34,7 @@ describe("buildRegistry", () => {
 
   it("includes child machines registered via setup actors", () => {
     const child = createMachine({ id: "child" });
-    const root = setup({ actorSources: { child } }).createMachine({
+    const root = setup({ actors: { child } }).createMachine({
       id: "root",
       invoke: { src: "child" },
     });
@@ -54,11 +54,11 @@ describe("buildRegistry", () => {
 
   it("recurses into grandchildren", () => {
     const grandchild = createMachine({ id: "grandchild" });
-    const child = setup({ actorSources: { grandchild } }).createMachine({
+    const child = setup({ actors: { grandchild } }).createMachine({
       id: "child",
       invoke: { src: "grandchild" },
     });
-    const root = setup({ actorSources: { child } }).createMachine({
+    const root = setup({ actors: { child } }).createMachine({
       id: "root",
       invoke: { src: "child" },
     });
@@ -74,7 +74,7 @@ describe("buildRegistry", () => {
   it("allows the same machine instance to be registered under multiple actor names", () => {
     const child = createMachine({ id: "child" });
     const root = setup({
-      actorSources: { first: child, second: child },
+      actors: { first: child, second: child },
     }).createMachine({ id: "root" });
 
     expect(buildRegistry(root).get("child")).toBe(child);
@@ -83,7 +83,7 @@ describe("buildRegistry", () => {
   it("rejects distinct machines with the same id", () => {
     const first = createMachine({ id: "duplicate" });
     const second = createMachine({ id: "duplicate" });
-    const root = setup({ actorSources: { first, second } }).createMachine({
+    const root = setup({ actors: { first, second } }).createMachine({
       id: "root",
     });
 

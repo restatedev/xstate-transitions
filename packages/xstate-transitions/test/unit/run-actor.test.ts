@@ -70,7 +70,7 @@ describe("runActor — fromPromise (ctx-less, wrapped in ctx.run)", () => {
       async ({ input }: { input: { value: number } }) => input.value * 2,
     );
     const machine = setup({
-      actorSources: { work: fromPromise(creator) },
+      actors: { work: fromPromise(creator) },
     }).createMachine({
       id: "machine",
       invoke: { id: "work", src: "work", input: { value: 21 } },
@@ -91,7 +91,7 @@ describe("runActor — fromPromise (ctx-less, wrapped in ctx.run)", () => {
       .fn<(args: { input: unknown }) => Promise<string>>()
       .mockRejectedValue(new Error("nope"));
     const machine = setup({
-      actorSources: { work: fromPromise(creator) },
+      actors: { work: fromPromise(creator) },
     }).createMachine({ id: "machine", invoke: { id: "work", src: "work" } });
     const { ctx } = fakeContext();
 
@@ -111,7 +111,7 @@ describe("runActor — fromPromise (ctx-less, wrapped in ctx.run)", () => {
       .mockRejectedValueOnce(new Error("transient"))
       .mockResolvedValue("ok");
     const machine = setup({
-      actorSources: { work: fromPromise(creator, { retry: true }) },
+      actors: { work: fromPromise(creator, { retry: true }) },
     }).createMachine({ id: "machine", invoke: { id: "work", src: "work" } });
     const { ctx } = fakeContext();
 
@@ -126,7 +126,7 @@ describe("runActor — fromPromise (ctx-less, wrapped in ctx.run)", () => {
       .fn<(args: { input: unknown }) => Promise<string>>()
       .mockRejectedValue(new Error("always"));
     const machine = setup({
-      actorSources: {
+      actors: {
         work: fromPromise(creator, { retry: { maxRetryAttempts: 2 } }),
       },
     }).createMachine({ id: "machine", invoke: { id: "work", src: "work" } });
@@ -147,7 +147,7 @@ describe("runActor — fromPromise (ctx-less, wrapped in ctx.run)", () => {
       .fn<(args: { input: unknown }) => Promise<string>>()
       .mockRejectedValue(new restate.TerminalError("fatal"));
     const machine = setup({
-      actorSources: { work: fromPromise(creator, { retry: true }) },
+      actors: { work: fromPromise(creator, { retry: true }) },
     }).createMachine({ id: "machine", invoke: { id: "work", src: "work" } });
     const { ctx } = fakeContext();
 
@@ -168,7 +168,7 @@ describe("runActor — fromHandler (ctx-aware)", () => {
         input.v + 1,
     );
     const machine = setup({
-      actorSources: { work: fromHandler(creator) },
+      actors: { work: fromHandler(creator) },
     }).createMachine({
       id: "machine",
       invoke: { id: "work", src: "work", input: { v: 41 } },
@@ -183,7 +183,7 @@ describe("runActor — fromHandler (ctx-aware)", () => {
 
   it("converts a TerminalError into an actor error event", async () => {
     const machine = setup({
-      actorSources: {
+      actors: {
         work: fromHandler(async () => {
           throw new restate.TerminalError("invalid input", { errorCode: 422 });
         }),
@@ -202,7 +202,7 @@ describe("runActor — fromHandler (ctx-aware)", () => {
   it("rethrows a transient error so Restate can retry the invocation", async () => {
     const transient = new Error("try again");
     const machine = setup({
-      actorSources: {
+      actors: {
         work: fromHandler(async () => {
           throw transient;
         }),
@@ -219,7 +219,7 @@ describe("runActor — fromHandler (ctx-aware)", () => {
 describe("runActor — vanilla xstate actor", () => {
   it("turns a vanilla promise rejection into a serializable actor error", async () => {
     const machine = setup({
-      actorSources: {
+      actors: {
         work: createAsyncLogic({
           run: async () => {
             throw new TypeError("boom");

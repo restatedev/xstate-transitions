@@ -60,7 +60,7 @@ export const bookLendingMachine = setup({
       declineBookhold: z.object({}),
     },
   },
-  actorSources: {
+  actors: {
     getBookStatus: fromPromise(
       async ({ input }: { input: { bookId: string } }) => {
         console.log("Getting status for book", input.bookId);

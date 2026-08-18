@@ -43,7 +43,7 @@ describeE2E("Actor completion races", (createActor) => {
       const pending: PendingRun[] = [];
       const machine = setup({
         schemas: { context: types<{ winner?: string }>() },
-        actorSources: { work: deferredWork(pending) },
+        actors: { work: deferredWork(pending) },
       }).createMachine({
         id: "actor-winner-loser",
         context: {},
@@ -115,7 +115,7 @@ describeE2E("Actor completion races", (createActor) => {
           input: types<{ generation: number }>(),
           context: types<{ generation: number; result?: string }>(),
         },
-        actorSources: { work: deferredWork(pending) },
+        actors: { work: deferredWork(pending) },
       }).createMachine({
         id: "actor-recreate-race",
         context: ({ input }) => ({ generation: input.generation }),

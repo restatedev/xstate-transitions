@@ -80,7 +80,7 @@ describe("Snapshot round-trip (stateless rehydration contract)", () => {
           states: {
             one: { on: { NEXT: { target: "two" } } },
             two: {},
-            hist: { type: "history", history: "shallow" },
+            hist: { type: "history", history: "shallow", target: "one" },
           },
         },
         paused: {

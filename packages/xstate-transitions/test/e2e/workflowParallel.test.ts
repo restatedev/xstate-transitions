@@ -17,7 +17,7 @@ import { describeE2E } from "./harness";
 
 // https://github.com/serverlessworkflow/specification/tree/main/examples#parallel-execution-example
 export const workflow = setup({
-  actorSources: {
+  actors: {
     shortDelay: fromPromise(async () => {
       await new Promise<void>((resolve) =>
         setTimeout(() => {

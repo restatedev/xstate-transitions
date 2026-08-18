@@ -11,7 +11,7 @@
 
 /*
  * When an invoked promise actor throws, the internal actor handlers translate
- * its outcome to an `xstate.error.actor.<id>` event, which drives the invoke's
+ * its outcome to an `xstate.error.actor` event carrying `actorId`, which drives the invoke's
  * `onError` transition.
  */
 
@@ -22,7 +22,7 @@ import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 const machine = setup({
-  actorSources: {
+  actors: {
     boom: fromPromise(async () => {
       throw new Error("kaboom");
     }),
