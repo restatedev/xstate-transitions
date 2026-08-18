@@ -30,7 +30,7 @@ const machine = setup({
   schemas: {
     context: types<{ a: string | null; b: string | null }>(),
   },
-  actorSources: {
+  actors: {
     actorA: fromPromise(async () => {
       await delay(20);
       return "A";

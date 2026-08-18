@@ -36,7 +36,7 @@ export const greetingMachine = setup({
     input: z.object({ person: z.object({ name: z.string() }) }),
     context: types<{ name: string; greeting: string | null }>(),
   },
-  actorSources: {
+  actors: {
     greetingFunction: fromPromise(
       async ({ input }: { input: { name: string } }) => {
         await delay(1000);

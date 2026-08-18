@@ -32,7 +32,7 @@ export const workflow = setup({
       applicant: Applicant;
     }>(),
   },
-  actorSources: {
+  actors: {
     startApplicationWorkflowId: fromPromise(async () => {
       console.log("startApplicationWorkflowId workflow started");
 

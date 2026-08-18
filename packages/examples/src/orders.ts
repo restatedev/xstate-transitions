@@ -75,7 +75,7 @@ export const orderMachine = setup({
       ADJUST: z.object({ quantity: z.number() }),
     },
   },
-  actorSources: {
+  actors: {
     reserveInventory,
   },
 }).createMachine({

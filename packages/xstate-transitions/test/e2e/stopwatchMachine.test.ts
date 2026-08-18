@@ -15,7 +15,7 @@ import { eventually } from "./eventually.js";
 import { describeE2E } from "./harness";
 
 export const stopwatchMachine = setup({
-  actorSources: {
+  actors: {
     ticks: createCallbackLogic(({ sendBack }) => {
       const interval = setInterval(() => {
         sendBack({ type: "TICK" });

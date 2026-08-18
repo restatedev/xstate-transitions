@@ -43,7 +43,7 @@ describeE2E("Transition retry atomicity", (createActor) => {
         schemas: {
           context: types<{ token: number; result?: number }>(),
         },
-        actorSources: { work },
+        actors: { work },
       }).createMachine({
         id: "transition-retry-atomicity",
         context: { token: 0 },

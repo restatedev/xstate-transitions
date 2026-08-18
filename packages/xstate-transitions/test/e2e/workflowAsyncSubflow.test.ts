@@ -18,7 +18,7 @@ import { describeE2E } from "./harness";
 const prompt = (_question: string) => Promise.resolve("bob");
 
 const onboardingWorkflow = setup({
-  actorSources: {
+  actors: {
     prompt: fromPromise(async ({ input }: { input: { question: string } }) => {
       const response = await prompt(input.question);
       return {
@@ -63,7 +63,7 @@ const onboardingWorkflow = setup({
 });
 
 export const workflow = setup({
-  actorSources: {
+  actors: {
     onboarding: onboardingWorkflow,
   },
 }).createMachine({

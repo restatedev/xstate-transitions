@@ -164,7 +164,7 @@ describe("internal transitions — entry set", () => {
     // (or re-run an entry `enq.spawn`) on every sibling switch, violating
     // exactly-once for the actor.
     const work = createAsyncLogic({ run: async () => "done" });
-    const machine = setup({ actorSources: { work } }).createMachine({
+    const machine = setup({ actors: { work } }).createMachine({
       id: "m",
       initial: "foo",
       states: {

@@ -29,7 +29,7 @@ export const workflow = setup({
     }>(),
     input: types<{ order: Order }>(),
   },
-  actorSources: {
+  actors: {
     provisionOrderFunction: fromPromise(
       async ({ input }: { input: { order: Order } }) => {
         console.log("starting provisionOrderFunction");

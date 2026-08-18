@@ -33,7 +33,7 @@ function generationMachine(pending: PendingRun[]) {
     schemas: {
       context: types<{ generation: number; result?: string }>(),
     },
-    actorSources: { work },
+    actors: { work },
   }).createMachine({
     id: "stale-promise-completion",
     context: { generation: 1 },

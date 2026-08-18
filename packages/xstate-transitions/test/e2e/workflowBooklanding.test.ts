@@ -56,7 +56,7 @@ export const workflow = setup({
       declineBookhold: types<Record<string, never>>(),
     },
   },
-  actorSources: {
+  actors: {
     "Get status for book": fromPromise(
       async ({ input }: { input: { bookid: string | undefined } }) => {
         console.log("Starting Get status for book", input);

@@ -68,7 +68,7 @@ export const workflow = setup({
     },
   },
 
-  actorSources: {
+  actors: {
     checkfunds: createAsyncLogic({
       run: async ({
         input,

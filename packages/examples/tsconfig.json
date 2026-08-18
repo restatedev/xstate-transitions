@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    "exactOptionalPropertyTypes": false,
     "paths": {
       "@restatedev/xstate": ["../xstate-transitions/src/index.ts"]
     }

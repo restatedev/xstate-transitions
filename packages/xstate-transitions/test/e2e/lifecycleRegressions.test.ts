@@ -50,7 +50,7 @@ const child = createMachine({
 });
 
 const restartableParent = setup({
-  actorSources: { child },
+  actors: { child },
   schemas: {
     context: types<{ readyCount: number }>(),
   },
@@ -74,7 +74,7 @@ const restartableParent = setup({
 const stoppableChild = createMachine({ id: "stoppable-child" });
 
 const explicitStopParent = setup({
-  actorSources: { child: stoppableChild },
+  actors: { child: stoppableChild },
   schemas: {
     context: types<{ ref: unknown; stopped: boolean }>(),
   },
