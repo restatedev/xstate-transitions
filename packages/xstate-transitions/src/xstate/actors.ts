@@ -19,7 +19,7 @@ export interface NormalizedError {
 
 /**
  * Resolve the actor logic referenced by an invoke/spawn `src`. Named actors
- * resolve via the machine's implementations; synthesized inline invoke names
+ * resolve via the machine's actor sources; synthesized inline invoke names
  * (`xstate.invoke.<index>.<nodeId>`) resolve via the state node's invoke config.
  */
 export function resolveReferencedActor(
@@ -28,7 +28,7 @@ export function resolveReferencedActor(
 ): unknown {
   const match = src.match(/^xstate\.invoke\.(\d+)\.(.*)/);
   if (!match) {
-    return machine.implementations.actorSources[src];
+    return machine.sources.actors[src];
   }
   const indexStr = match[1];
   const nodeId = match[2];
@@ -49,9 +49,10 @@ export function createDoneActorEvent(
   output?: unknown,
 ): DoneActorEvent {
   return {
-    type: `xstate.done.actor.${invokeId}`,
+    type: "xstate.done.actor",
     output,
     actorId: invokeId,
+    sessionId: invokeId,
   };
 }
 
@@ -67,9 +68,10 @@ export function createErrorActorEvent(
   error: unknown,
 ): ErrorActorEvent {
   return {
-    type: `xstate.error.actor.${invokeId}`,
+    type: "xstate.error.actor",
     error: normalizeError(error),
     actorId: invokeId,
+    sessionId: invokeId,
   };
 }
 
@@ -79,8 +81,9 @@ export function createNormalizedErrorActorEvent(
   error: NormalizedError,
 ): ErrorActorEvent {
   return {
-    type: `xstate.error.actor.${invokeId}`,
+    type: "xstate.error.actor",
     error,
     actorId: invokeId,
+    sessionId: invokeId,
   };
 }
