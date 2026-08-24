@@ -40,7 +40,7 @@ describe("createMachineObject configuration", () => {
 
     expect(definition).toMatchObject({ description: expect.any(String) });
 
-    for (const name of ["create", "send", "snapshot", "subscribe", "waitFor"]) {
+    for (const name of ["create", "send", "snapshot", "waitFor"]) {
       expect(getHandlerOptions(handlers[name])).toMatchObject({
         description: expect.any(String),
       });
@@ -53,6 +53,8 @@ describe("createMachineObject configuration", () => {
       "actorError",
       "deliverScheduled",
       "executeActor",
+      "subscribe",
+      "unsubscribe",
       "cleanupState",
       "cleanupFinalState",
     ]) {

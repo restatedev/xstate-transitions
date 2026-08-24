@@ -87,9 +87,7 @@ describeE2E("Actor completion races", (createActor) => {
       if (!winner || !loser) throw new Error("Expected both racing actors");
 
       winner.resolve("a");
-      await expect(
-        actor.waitFor("done", undefined, 5_000),
-      ).resolves.toMatchObject({
+      await expect(actor.waitFor("done", 5_000)).resolves.toMatchObject({
         status: "done",
         value: "done",
         context: { winner: "a" },
@@ -160,9 +158,7 @@ describeE2E("Actor completion races", (createActor) => {
       });
 
       current.resolve("current");
-      await expect(
-        actor.waitFor("done", undefined, 5_000),
-      ).resolves.toMatchObject({
+      await expect(actor.waitFor("done", 5_000)).resolves.toMatchObject({
         status: "done",
         value: "done",
         context: { generation: 2, result: "current" },

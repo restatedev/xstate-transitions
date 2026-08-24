@@ -24,7 +24,6 @@ export type {
   StandardSchema,
   StandardSchemaIssue,
   StandardSchemaResult,
-  SubscribeRequest,
   WaitForRequest,
 } from "./restate/types";
-export type { ReturnedSnapshot, StoredState, WaitPath } from "./xstate/types";
+export type { Condition, ReturnedSnapshot, StoredState } from "./xstate/types";

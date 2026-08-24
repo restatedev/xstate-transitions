@@ -9,30 +9,47 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import type { ReturnedSnapshot, WaitOutcome, WaitPath } from "./types";
+import type { Condition, ConditionOutcome, ReturnedSnapshot } from "./types";
 
 const SNAPSHOT_CONTEXT_PREFIX = "/context";
+const HAS_TAG_PREFIX = "hasTag:";
 const ARRAY_INDEX = /^(?:0|[1-9][0-9]*)$/;
 const INVALID_ESCAPE = /~(?:[^01]|$)/;
 
-/** Whether a string is a non-root RFC 6901 JSON Pointer. */
-export function isValidWaitPath(path: unknown): path is WaitPath {
-  return (
-    typeof path === "string" &&
-    path.startsWith("/") &&
-    !INVALID_ESCAPE.test(path)
-  );
+/** Whether a value is a supported wait condition. */
+export function isValidCondition(condition: unknown): condition is Condition {
+  if (condition === "done") return true;
+  if (typeof condition !== "string") return false;
+  if (!condition.startsWith(HAS_TAG_PREFIX)) return false;
+  return !INVALID_ESCAPE.test(condition.slice(HAS_TAG_PREFIX.length));
 }
 
 /**
- * Decide whether a context path exists in a settled snapshot. Pure: returns
- * the decision (resolve/reject/pending); the caller performs any side effect
- * (e.g. resolving a Restate awakeable).
+ * Decide whether a wait condition is met by a settled snapshot. `done` checks
+ * the snapshot status. For compatibility, `hasTag:<path>` keeps its historical
+ * spelling but now checks whether `/<path>` exists in machine context.
  */
-export function evaluateWaitPath(
+export function evaluateCondition(
   snapshot: ReturnedSnapshot,
-  path: WaitPath,
-): WaitOutcome {
+  condition: Condition,
+): ConditionOutcome {
+  if (condition === "done") {
+    if (snapshot.status === "done") {
+      return { status: "resolve", snapshot };
+    }
+    if (snapshot.status === "error") {
+      return { status: "reject", reason: "State machine returned an error" };
+    }
+    if (snapshot.status !== "active") {
+      return {
+        status: "reject",
+        reason: "State machine stopped before completing",
+      };
+    }
+    return { status: "pending" };
+  }
+
+  const path = `/${condition.slice(HAS_TAG_PREFIX.length)}`;
   if (jsonPointerExists(snapshot, `${SNAPSHOT_CONTEXT_PREFIX}${path}`)) {
     return { status: "resolve", snapshot };
   }
@@ -44,7 +61,7 @@ export function evaluateWaitPath(
   if (snapshot.status !== "active") {
     return {
       status: "reject",
-      reason: "State machine completed before the path existed",
+      reason: "State machine completed without the condition being met",
     };
   }
 

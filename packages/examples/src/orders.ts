@@ -21,8 +21,8 @@
  * It also shows the pieces you reach for in a real durable workflow:
  *   - `fromHandler` for a ctx-aware effect journaled with `ctx.run`;
  *   - `onDone` / `onError` branches from a single invoke;
- *   - a durable context milestone that `waitFor({ path })` can observe even
- *     after the machine has moved on.
+ *   - a durable context milestone that `waitFor({ condition })` can observe
+ *     even after the machine has moved on.
  *
  * This example uses real Zod schemas in `schemas`, so `createMachineObject`
  * derives the ingress serdes automatically — validating and coercing

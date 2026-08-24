@@ -20,11 +20,12 @@ import {
   createDoneActorEvent,
   createNormalizedErrorActorEvent,
 } from "../xstate/actors";
-import { evaluateWaitPath, isValidWaitPath } from "../xstate/conditions";
+import { evaluateCondition, isValidCondition } from "../xstate/conditions";
 import { initialStep, resumeStep } from "../xstate/interpret";
 import { buildRegistry } from "../xstate/registry";
 import { fromStored, toReturnedSnapshot } from "../xstate/snapshot";
 import type {
+  Condition,
   ResumeInput,
   ReturnedSnapshot,
   Step,
@@ -109,11 +110,11 @@ const INTERNAL_LAZY_HANDLER_OPTIONS = {
  * - `create(input)` starts a new instance from its initial transition.
  * - `send(event)` applies an event and returns after the macrostep is persisted.
  * - `snapshot()` reads the current serializable snapshot.
- * - `subscribe(request)` resolves an awakeable when a context path exists.
  * - `waitFor(request)` provides awakeable-backed long polling.
  *
  * Internal ingress-private handlers carry child initialization, actor results,
- * machine messages, delayed events, promise execution, and state cleanup.
+ * machine messages, delayed events, wait registration, promise execution, and
+ * state cleanup.
  *
  * @param name The virtual object service name.
  * @param machine The root machine and entry point to its reachable child graph.
@@ -204,24 +205,7 @@ export function createMachineObject<
       ),
 
       /**
-       * Registers an existing Restate awakeable for a machine context path.
-       *
-       * This is the lower-level counterpart to `waitFor`. It resolves or
-       * rejects the awakeable immediately when the path is already
-       * decided; otherwise it stores the awakeable ID for settlement after a
-       * later transition. It is exclusive because registration mutates state.
-       */
-      subscribe: restate.createObjectHandler(
-        {
-          description:
-            "Registers an awakeable until a path exists in machine context.",
-        },
-        (context: restate.ObjectContext, request: SubscribeRequest) =>
-          handlers.subscribe(context, request),
-      ),
-
-      /**
-       * Waits until a path exists in the machine context.
+       * Waits until the machine completes or a context marker exists.
        *
        * The shared handler creates an awakeable, registers it through the
        * exclusive `subscribe` handler so registration and transitions cannot
@@ -230,23 +214,41 @@ export function createMachineObject<
       waitFor: restate.createObjectSharedHandler(
         {
           description:
-            "Waits until an RFC 6901 path exists in the machine context.",
+            "Waits for completion or for a hasTag-prefixed context path to exist.",
         },
-        (context: restate.ObjectSharedContext, request: WaitForRequest) =>
+        (context: restate.ObjectSharedContext, request: WaitForRequest<M>) =>
           handlers.waitFor(context, request),
+      ),
+
+      // Internal handlers
+
+      /**
+       * Registers an existing Restate awakeable for a machine condition.
+       *
+       * This is the ingress-private counterpart to `waitFor`. It resolves or
+       * rejects the awakeable immediately when the condition is already decided;
+       * otherwise it stores the awakeable ID for settlement after a later
+       * transition. It is exclusive because registration mutates state.
+       */
+      subscribe: restate.createObjectHandler(
+        {
+          ...INTERNAL_HANDLER_OPTIONS,
+          description:
+            "Registers an awakeable for completion or a context-path condition.",
+        },
+        (context: restate.ObjectContext, request: SubscribeRequest) =>
+          handlers.subscribe(context, request),
       ),
 
       /** Removes a waiter whose shared `waitFor` invocation has ended. */
       unsubscribe: restate.createObjectHandler(
         {
           ...INTERNAL_HANDLER_OPTIONS,
-          description: "Removes one pending context-path awakeable.",
+          description: "Removes one pending condition awakeable.",
         },
         (context: restate.ObjectContext, request: UnsubscribeRequest) =>
           handlers.unsubscribe(context, request),
       ),
-
-      // Internal handlers
 
       /**
        * Initializes a child machine instance created by a parent machine.
@@ -448,12 +450,12 @@ class MachineHandlers<M extends AnyStateMachine> {
   ): Promise<void> {
     await validateNotDisposed(context);
     const stored = await getRequiredState(context);
-    validateWaitPath(request.path);
+    validateCondition(request.condition);
 
     const machine = this.runtime.resolveMachine(await getMachineId(context));
     const snapshot = fromStored(machine, stored);
     const returned = toReturnedSnapshot(snapshot);
-    const outcome = evaluateWaitPath(returned, request.path);
+    const outcome = evaluateCondition(returned, request.condition);
 
     if (outcome.status === "resolve") {
       context.resolveAwakeable(request.awakeableId, outcome.snapshot);
@@ -465,11 +467,11 @@ class MachineHandlers<M extends AnyStateMachine> {
     }
 
     const subscriptions = await getSubscriptions(context);
-    const existing = subscriptions[request.path];
+    const existing = subscriptions[request.condition];
     if (existing !== undefined) {
       existing.awakeables.push(request.awakeableId);
     } else {
-      subscriptions[request.path] = {
+      subscriptions[request.condition] = {
         awakeables: [request.awakeableId],
       };
     }
@@ -478,9 +480,9 @@ class MachineHandlers<M extends AnyStateMachine> {
 
   async waitFor(
     context: restate.ObjectSharedContext,
-    request: WaitForRequest,
+    request: WaitForRequest<M>,
   ): Promise<ReturnedSnapshot> {
-    validateWaitPath(request.path);
+    validateCondition(request.condition);
     const { id, promise } = context.awakeable<ReturnedSnapshot>();
 
     const subscriber = context.objectClient<MachineInternalVirtualObject>(
@@ -488,7 +490,7 @@ class MachineHandlers<M extends AnyStateMachine> {
       context.key,
     );
     await subscriber.subscribe({
-      path: request.path,
+      condition: request.condition,
       awakeableId: id,
     });
 
@@ -498,7 +500,10 @@ class MachineHandlers<M extends AnyStateMachine> {
         : await promise;
     } catch (error) {
       if (!(error instanceof restate.TerminalError)) throw error;
-      await subscriber.unsubscribe({ path: request.path, awakeableId: id });
+      await subscriber.unsubscribe({
+        condition: request.condition,
+        awakeableId: id,
+      });
       if (error.code !== 500) throw error;
       throw new restate.TerminalError(error.message, { errorCode: 412 });
     }
@@ -509,14 +514,14 @@ class MachineHandlers<M extends AnyStateMachine> {
     request: UnsubscribeRequest,
   ): Promise<void> {
     const subscriptions = await getSubscriptions(context);
-    const existing = subscriptions[request.path];
+    const existing = subscriptions[request.condition];
     if (existing === undefined) return;
 
     existing.awakeables = existing.awakeables.filter(
       (awakeable) => awakeable !== request.awakeableId,
     );
     if (existing.awakeables.length === 0) {
-      delete subscriptions[request.path];
+      delete subscriptions[request.condition];
     }
     setSubscriptions(context, subscriptions);
   }
@@ -620,7 +625,7 @@ class MachineHandlers<M extends AnyStateMachine> {
   async cleanupState(context: restate.ObjectContext): Promise<void> {
     await rejectSubscriptions(
       context,
-      "State machine was disposed before the path existed",
+      "State machine was disposed before the condition was met",
     );
     markDisposedAndClear(context);
   }
@@ -632,7 +637,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     if ((await getCleanupToken(context)) !== request.token) return;
     await rejectSubscriptions(
       context,
-      "State machine was disposed before the path existed",
+      "State machine was disposed before the condition was met",
     );
     markDisposedAndClear(context);
   }
@@ -668,7 +673,7 @@ async function initializeRoot<M extends AnyStateMachine>(
 ): Promise<void> {
   await rejectSubscriptions(
     context,
-    "State machine was reset before the path existed",
+    "State machine was reset before the condition was met",
   );
   clearRuntimeState(context);
   clearIdentity(context);
@@ -688,7 +693,7 @@ async function initializeChild(
 ): Promise<void> {
   await rejectSubscriptions(
     context,
-    "State machine was reset before the path existed",
+    "State machine was reset before the condition was met",
   );
   clearRuntimeState(context);
   setIdentity(context, request);
@@ -837,9 +842,9 @@ function validatePublicEvent(event: unknown): asserts event is AnyEventObject {
   }
 }
 
-function validateWaitPath(path: unknown): asserts path is `/${string}` {
-  if (!isValidWaitPath(path)) {
-    throw new restate.TerminalError("Invalid wait path", {
+function validateCondition(condition: unknown): asserts condition is Condition {
+  if (!isValidCondition(condition)) {
+    throw new restate.TerminalError("Invalid subscription condition", {
       errorCode: 400,
     });
   }

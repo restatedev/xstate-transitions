@@ -16,7 +16,7 @@ import {
 } from "@restatedev/restate-sdk-testcontainers";
 import type { AnyStateMachine } from "xstate";
 import { type AnyEventObject } from "xstate";
-import type { MachineVirtualObject, WaitPath } from "../../src";
+import type { Condition, MachineVirtualObject } from "../../src";
 import { createMachineObject, type MachineObjectOptions } from "../../src";
 
 export type RunMachineOptions<M extends AnyStateMachine = AnyStateMachine> = {
@@ -35,7 +35,7 @@ export type RunningMachine<SnapshotType> = {
   create: (input?: unknown) => Promise<void>;
   send: (event: AnyEventObject) => Promise<void>;
   snapshot(): Promise<SnapshotType>;
-  waitFor(path: WaitPath, timeout?: number): Promise<SnapshotType>;
+  waitFor(condition: Condition, timeout?: number): Promise<SnapshotType>;
   [Symbol.dispose](): void;
 };
 
@@ -69,7 +69,10 @@ export async function createRestateTestActor<
       create: (input: object) => Promise<void>;
       send: (event: AnyEventObject) => Promise<void>;
       snapshot: () => Promise<unknown>;
-      waitFor: (req: { path: WaitPath; timeout?: number }) => Promise<unknown>;
+      waitFor: (req: {
+        condition: Condition;
+        timeout?: number;
+      }) => Promise<unknown>;
     };
     await client.create({ ...(opts.input ?? {}) });
     return {
@@ -84,9 +87,9 @@ export async function createRestateTestActor<
         return (await client.snapshot()) as SnapshotType;
       },
 
-      waitFor: async (path: WaitPath, timeout?: number) => {
+      waitFor: async (condition: Condition, timeout?: number) => {
         return (await client.waitFor({
-          path,
+          condition,
           ...(timeout === undefined ? {} : { timeout }),
         })) as SnapshotType;
       },

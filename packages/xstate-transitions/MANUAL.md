@@ -229,8 +229,8 @@ Then register the deployment at `http://localhost:9080` in Restate's UI at
 
 ## Calling a machine
 
-The public handler surface is `create`, `send`, `snapshot`, `waitFor`, and the
-lower-level `subscribe` handler. The URL shape through Restate ingress is:
+The public handler surface is `create`, `send`, `snapshot`, and `waitFor`. The
+URL shape through Restate ingress is:
 
 ```text
 /{service-name}/{object-key}/{handler-name}
@@ -253,7 +253,7 @@ curl http://localhost:8080/orders/order-123/snapshot \
 
 # Wait at most 30 seconds for a durable context marker to exist.
 curl http://localhost:8080/orders/order-123/waitFor \
-  --json '{"path":"/milestones/confirmed","timeout":30000}'
+  --json '{"condition":"hasTag:milestones/confirmed","timeout":30000}'
 ```
 
 You can also use a generated Restate client or the TypeScript SDK client. The
@@ -591,32 +591,38 @@ self-event. Do not use `setInterval` or a callback actor.
 
 ## Waiting for progress
 
-`waitFor` accepts an [RFC 6901 JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901)
-relative to the machine context:
+`waitFor` keeps its original condition syntax:
 
 ```ts
-type WaitPath = `/${string}`;
+type Condition = "done" | `hasTag:${string}`;
 ```
 
-The request contains the path and an optional timeout:
+The request contains the condition and an optional timeout. Event delivery is
+deliberately not part of this request:
 
 ```ts
 await client.waitFor({
-  path: "/milestones/confirmed",
+  condition: "hasTag:milestones/confirmed",
   timeout: 30_000,
 });
 ```
 
-The path resolves when it identifies any value in `snapshot.context`. Falsy
-values (`false`, `0`, `""`) and `null` count as present. Missing object members,
+`done` resolves when the snapshot status is `done`. Despite its compatibility
+name, `hasTag:<path>` no longer checks XState tags: the suffix is converted to
+the context-relative [RFC 6901 JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901)
+`/<path>`. For example, `hasTag:milestones/confirmed` checks
+`snapshot.context.milestones.confirmed`.
+
+A context condition resolves when its path identifies any value. Falsy values
+(`false`, `0`, `""`) and `null` count as present. Missing object members,
 invalid array indices, and paths blocked by a primitive remain pending. Use
 `~0` for a literal `~` and `~1` for a literal `/` in an object key.
 
 Machine authors should leave progress markers in context for the remainder of
 the machine incarnation. This makes a milestone observable even when the
 caller starts waiting after the transition that produced it. If a terminal
-snapshot does not contain the path, the wait rejects because that incarnation
-can no longer make the path appear.
+snapshot does not contain the requested marker, the wait rejects because that
+incarnation can no longer make it appear.
 
 Event delivery stays separate from waiting. The shared `waitFor` handler calls
 an exclusive `subscribe` handler that rechecks the latest snapshot before
@@ -624,9 +630,8 @@ storing the awakeable. Therefore either the transition runs first and
 registration observes its marker, or registration runs first and the
 transition settles the stored waiter.
 
-`subscribe` is the low-level building block for integrating an existing Restate
-awakeable. Most callers should use `waitFor`, which creates and awaits the
-awakeable for them.
+`subscribe` is ingress-private and exists only as the exclusive registration
+step used by `waitFor`, which creates and awaits the awakeable for callers.
 
 A timed-out waiter unregisters its awakeable from durable state. Reset and
 disposal reject and clear waiters belonging to the old machine incarnation.
@@ -738,7 +743,7 @@ repository, not every feature available in XState itself.
 | `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                        |
 | `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                                 |
 | `enq.stop(ref)` / invoke exit                      | Supported              | Stopped by explicit stop or when the invoking state exits     |
-| Context-path `waitFor`                             | Integration feature    | Resolves when an RFC 6901 path exists in context              |
+| Condition-based `waitFor`                          | Integration feature    | Supports `done`; `hasTag:<path>` checks context existence     |
 | Ingress validation from `machine.schemas`          | Integration feature    | Real schemas validate/coerce ingress and appear in discovery  |
 | Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone       |
 | Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed                |
@@ -810,7 +815,7 @@ describeE2E("order workflow", (createActor) => {
       input: { sku: "ABC-42", quantity: 2 },
     });
 
-    const confirmed = order.waitFor("/milestones/confirmed");
+    const confirmed = order.waitFor("hasTag:milestones/confirmed");
     await order.send({ type: "SUBMIT" });
 
     await expect(confirmed).resolves.toMatchObject({
@@ -914,7 +919,7 @@ flowchart TD
     Effects --> Timer["Delayed self-call"]
     Effects --> Child["Child object instance"]
     Effects --> Message["Self / parent / child send"]
-    Step --> Waiters["Settle context-path waiters"]
+    Step --> Waiters["Settle condition waiters"]
     Actor --> ActorResult["actorDone / actorError"]
     Child --> ActorResult
     Timer --> DomainEvent["deliverEvent"]
@@ -1020,7 +1025,7 @@ sequenceDiagram
     R-->>H: recorded Step
     H->>R: set nextState
     H->>E: execute effects in order
-    H->>R: settle context-path waiters
+    H->>R: settle condition waiters
     H->>E: report terminal child state
     H->>E: optionally schedule final cleanup
     H-->>C: complete
@@ -1206,22 +1211,22 @@ queue-removal primitive.
 `waitFor` is a shared handler so it can remain suspended without blocking the
 object's exclusive event handlers. It:
 
-1. validates the context-relative RFC 6901 path;
+1. validates `done` or the RFC 6901 suffix of `hasTag:<path>`;
 2. creates a Restate awakeable;
 3. calls the exclusive `subscribe` handler to evaluate or store it; and
 4. awaits the result, optionally with a timeout.
 
-`subscribe` first checks the current snapshot. It immediately resolves an
-existing path or rejects one that can no longer appear. Otherwise it stores the
-awakeable ID under the path.
+`subscribe` first checks the current snapshot. It immediately resolves a done
+machine or an existing context marker, and rejects a condition that can no
+longer be met. Otherwise it stores the awakeable ID under the condition.
 
 Every committed step calls `settleSubscriptions`. It evaluates each distinct
-path once, settles all awakeables registered for a decided path, and removes
-that path from durable state.
+condition once, settles all awakeables registered for a decided condition, and
+removes that condition from durable state.
 
 An awakeable rejection arrives as a Restate error with code 500. `waitFor`
 translates that specific case to terminal status 412 so callers can distinguish
-a path that became impossible from a transient service failure.
+a condition that became impossible from a transient service failure.
 
 On timeout, the shared handler calls an ingress-private exclusive `unsubscribe`
 handler before returning the timeout. Reset and disposal reject every waiter
@@ -1287,7 +1292,7 @@ For an XState upgrade:
 
 The repository uses four confidence layers:
 
-1. **Pure behavior tests** cover snapshots, wait paths, registry discovery,
+1. **Pure behavior tests** cover snapshots, wait conditions, registry discovery,
    action translation, routing, and exact `Step`/`Effect` values.
 2. **Adapter unit tests** use narrow fake contexts to cover state-independent
    Restate dispatch, cancellation tokens, child maps, actor errors, and terminal
@@ -1341,26 +1346,24 @@ High-value invariants to preserve include:
 | `MachineObjectOptions` | Type     | Restate object options plus `finalStateTTL`                                 |
 | `StandardSchema`       | Type     | Library-neutral runtime-schema interface (the shape `schemas` entries take) |
 | `MachineVirtualObject` | Type     | Typed handler surface for SDK clients                                       |
-| `WaitForRequest`       | Type     | Context-relative path and optional timeout                                  |
-| `SubscribeRequest`     | Type     | Context-relative path plus an existing awakeable ID                         |
+| `WaitForRequest`       | Type     | `done`/`hasTag:<path>` condition and optional timeout                       |
+| `Condition`            | Type     | `done` or compatibility syntax `hasTag:<path>`                              |
 | `StoredState`          | Type     | Internal serializable snapshot representation                               |
 | `ReturnedSnapshot`     | Type     | Public serializable snapshot projection                                     |
-| `WaitPath`             | Type     | Non-root RFC 6901 pointer (`/${string}`)                                    |
 
 ## Public handlers
 
-| Handler     | Request            | Result             | Notes                                       |
-| ----------- | ------------------ | ------------------ | ------------------------------------------- |
-| `create`    | `InputFrom<M>`     | `void`             | Creates or resets the root instance         |
-| `send`      | `EventFrom<M>`     | `void`             | Commits one settled macrostep               |
-| `snapshot`  | `{}`               | `ReturnedSnapshot` | Requires an existing, non-disposed instance |
-| `waitFor`   | `WaitForRequest`   | `ReturnedSnapshot` | Shared long-poll for context-path existence |
-| `subscribe` | `SubscribeRequest` | `void`             | Low-level awakeable registration            |
+| Handler    | Request          | Result             | Notes                                                |
+| ---------- | ---------------- | ------------------ | ---------------------------------------------------- |
+| `create`   | `InputFrom<M>`   | `void`             | Creates or resets the root instance                  |
+| `send`     | `EventFrom<M>`   | `void`             | Commits one settled macrostep                        |
+| `snapshot` | `{}`             | `ReturnedSnapshot` | Requires an existing, non-disposed instance          |
+| `waitFor`  | `WaitForRequest` | `ReturnedSnapshot` | Shared long-poll for completion or context existence |
 
 The object also contains ingress-private handlers named `deliverEvent`,
 `actorDone`, `actorError`, `executeActor`, `deliverScheduled`, `initChild`,
-`unsubscribe`, `cleanupState`, and `cleanupFinalState`. `deliverEvent` carries
-internally routed domain events;
+`subscribe`, `unsubscribe`, `cleanupState`, and `cleanupFinalState`.
+`deliverEvent` carries internally routed domain events;
 `actorDone` and `actorError` are the finite actor lifecycle protocols. They are
 implementation details and should not be called by application clients.
 
@@ -1372,7 +1375,7 @@ All KV access is centralized in [`src/restate/state.ts`](src/restate/state.ts).
 | ----------------- | ------------------------------- | ------------------------------------------------------------- |
 | `state`           | `StoredState`                   | Current serialized XState snapshot                            |
 | `disposed`        | `boolean`                       | Marks an instance cleaned after final-state TTL or child stop |
-| `subscriptions`   | context path → awakeable IDs    | Pending `waitFor`/`subscribe` registrations                   |
+| `subscriptions`   | condition → awakeable IDs       | Pending `waitFor`/`subscribe` registrations                   |
 | `scheduled`       | send ID → delivery record       | Cancellation and stale-delivery guard                         |
 | `children`        | child ID → `{ key, machineId }` | Durable child routing and lifecycle                           |
 | `actorExecutions` | actor ID → execution ID         | Rejects stale promise and child completion reports            |
@@ -1387,10 +1390,10 @@ All KV access is centralized in [`src/restate/state.ts`](src/restate/state.ts).
 
 | Status/code | Meaning                                                | Typical fix                                                      |
 | ----------- | ------------------------------------------------------ | ---------------------------------------------------------------- |
-| 400         | Invalid input, event, or wait path                     | Use a non-root RFC 6901 path beginning with `/`                  |
+| 400         | Invalid input, event, or wait condition                | Use `done` or `hasTag:<valid RFC 6901 path suffix>`              |
 | 404         | No machine at this object key                          | Call `create` before `send`, `snapshot`, or `waitFor`            |
 | 410         | Instance was disposed                                  | Use a new key or explicitly call `create` to start fresh         |
-| 412         | Wait path became impossible                            | Handle completed/error outcome instead of retrying the same path |
+| 412         | Wait condition became impossible                       | Handle completed/error outcome instead of retrying the condition |
 | 500         | Unknown persisted child machine ID or internal failure | Check unique stable machine IDs and deployment compatibility     |
 
 Configuration errors such as a negative, infinite, or `NaN`

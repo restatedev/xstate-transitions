@@ -23,13 +23,13 @@ Three are ports of upstream [XState examples](https://github.com/statelyai/xstat
 from v5 (`assign` / `actions` / named `delays`) to this integration's
 pure-transition v6 style; the rest lean into `setup({ schemas })` typing.
 
-| File          | Service    | Shows                                                                     |
-| ------------- | ---------- | ------------------------------------------------------------------------- |
-| `greeting.ts` | `greeting` | Smallest shape: typed `input`, one async actor, `final` `output`.         |
-| `auction.ts`  | `auction`  | Typed event payload + a durable `after` timer that closes bidding.        |
-| `library.ts`  | `library`  | Typed events, `always` guards, nested compound state, a 2-week timer.     |
-| `orders.ts`   | `orders`   | Schemas-first typing, `fromHandler`/`ctx.run`, `onError`, path `waitFor`. |
-| `example.ts`  | `payment`  | Payment confirmation: invoke → `always` branch → success/insufficient.    |
+| File          | Service    | Shows                                                                        |
+| ------------- | ---------- | ---------------------------------------------------------------------------- |
+| `greeting.ts` | `greeting` | Smallest shape: typed `input`, one async actor, `final` `output`.            |
+| `auction.ts`  | `auction`  | Typed event payload + a durable `after` timer that closes bidding.           |
+| `library.ts`  | `library`  | Typed events, `always` guards, nested compound state, a 2-week timer.        |
+| `orders.ts`   | `orders`   | Schemas-first typing, `fromHandler`/`ctx.run`, `onError`, durable `waitFor`. |
+| `example.ts`  | `payment`  | Payment confirmation: invoke → `always` branch → success/insufficient.       |
 
 `src/index.ts` serves them all with `restate.serve({ services: [...] })`.
 
@@ -43,7 +43,7 @@ curl http://localhost:8080/greeting/greet-1/snapshot --json '{}'
 # Order: schemas give a typed event surface; wait for a durable context marker.
 curl http://localhost:8080/orders/order-1/create --json '{"sku":"ABC-42","quantity":2}'
 curl http://localhost:8080/orders/order-1/send   --json '{"type":"SUBMIT"}'
-curl http://localhost:8080/orders/order-1/waitFor --json '{"path":"/milestones/confirmed","timeout":30000}'
+curl http://localhost:8080/orders/order-1/waitFor --json '{"condition":"hasTag:milestones/confirmed","timeout":30000}'
 
 # Auction: bid, then read the winner after the bidding window closes.
 curl http://localhost:8080/auction/car-1/create --json '{}'

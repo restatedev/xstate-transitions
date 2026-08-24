@@ -45,11 +45,11 @@ export interface ReturnedSnapshot {
   tags: string[];
 }
 
-/** An RFC 6901 JSON Pointer evaluated relative to the machine context. */
-export type WaitPath = `/${string}`;
+/** A condition that `waitFor` can wait on. */
+export type Condition = "done" | `hasTag:${string}`;
 
-/** The pure outcome of evaluating a wait path against a settled snapshot. */
-export type WaitOutcome =
+/** The pure outcome of evaluating a wait condition against a settled snapshot. */
+export type ConditionOutcome =
   | { status: "pending" }
   | { status: "resolve"; snapshot: ReturnedSnapshot }
   | { status: "reject"; reason: string };

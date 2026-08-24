@@ -27,7 +27,7 @@ const KEYS = {
   state: "state",
   /** `true` once the instance has been disposed after its final state. */
   disposed: "disposed",
-  /** Pending waitFor/subscribe awakeables, keyed by context path. */
+  /** Pending waitFor/subscribe awakeables, keyed by condition. */
   subscriptions: "subscriptions",
   /** Pending delayed deliveries, keyed by sendId. */
   scheduled: "scheduled",

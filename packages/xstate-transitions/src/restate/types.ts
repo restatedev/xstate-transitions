@@ -22,7 +22,7 @@ import type {
   InputFrom,
 } from "xstate";
 import type { NormalizedError } from "../xstate/actors";
-import type { ReturnedSnapshot, SpawnParams, WaitPath } from "../xstate/types";
+import type { Condition, ReturnedSnapshot, SpawnParams } from "../xstate/types";
 
 /** One validation issue in the library-neutral Standard Schema format. */
 export interface StandardSchemaIssue {
@@ -119,21 +119,22 @@ export interface ChildRecord {
   readonly machineId: string;
 }
 
-/** Persisted set of awakeables waiting on a single context path. */
+/** Persisted set of awakeables waiting on a single condition. */
 export interface Subscription {
   awakeables: string[];
 }
 
+/** @internal Payload for the exclusive wait-registration handler. */
 export interface SubscribeRequest {
-  readonly path: WaitPath;
+  readonly condition: Condition;
   readonly awakeableId: string;
 }
 
 /** Payload for removing one pending awakeable after its wait has ended. */
 export type UnsubscribeRequest = SubscribeRequest;
 
-export interface WaitForRequest {
-  readonly path: WaitPath;
+export interface WaitForRequest<_M extends AnyStateMachine = AnyStateMachine> {
+  readonly condition: Condition;
   readonly timeout?: number;
 }
 
@@ -145,12 +146,8 @@ export interface MachineVirtualObject<
   snapshot: (context: ObjectContext) => Promise<ReturnedSnapshot>;
   waitFor: (
     context: ObjectSharedContext,
-    request: WaitForRequest,
+    request: WaitForRequest<M>,
   ) => Promise<ReturnedSnapshot>;
-  subscribe: (
-    context: ObjectContext,
-    request: SubscribeRequest,
-  ) => Promise<void>;
 }
 
 /** @internal The complete handler surface used by the Restate runtime. */
@@ -178,6 +175,10 @@ export interface MachineInternalVirtualObject<
     request: ScheduledEvent,
   ) => Promise<void>;
   initChild: (context: ObjectContext, request: InitRequest) => Promise<void>;
+  subscribe: (
+    context: ObjectContext,
+    request: SubscribeRequest,
+  ) => Promise<void>;
   unsubscribe: (
     context: ObjectContext,
     request: UnsubscribeRequest,

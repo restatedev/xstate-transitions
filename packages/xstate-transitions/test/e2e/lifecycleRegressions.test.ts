@@ -108,7 +108,7 @@ describeE2E("Lifecycle regressions", (createActor) => {
         context: { seen: string[] };
       }>({ machine: delayedSelfMachine });
 
-      const snapshot = await actor.waitFor("done", undefined, 5_000);
+      const snapshot = await actor.waitFor("done", 5_000);
 
       expect(snapshot.status).toBe("done");
       expect(snapshot.context.seen).toEqual(["first", "second"]);
