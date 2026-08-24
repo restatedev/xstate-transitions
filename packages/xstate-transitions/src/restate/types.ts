@@ -22,7 +22,7 @@ import type {
   InputFrom,
 } from "xstate";
 import type { NormalizedError } from "../xstate/actors";
-import type { Condition, ReturnedSnapshot, SpawnParams } from "../xstate/types";
+import type { ReturnedSnapshot, SpawnParams, WaitPath } from "../xstate/types";
 
 /** One validation issue in the library-neutral Standard Schema format. */
 export interface StandardSchemaIssue {
@@ -119,20 +119,22 @@ export interface ChildRecord {
   readonly machineId: string;
 }
 
-/** Persisted set of awakeables waiting on a single condition. */
+/** Persisted set of awakeables waiting on a single context path. */
 export interface Subscription {
   awakeables: string[];
 }
 
 export interface SubscribeRequest {
-  readonly condition: Condition;
+  readonly path: WaitPath;
   readonly awakeableId: string;
 }
 
-export interface WaitForRequest<M extends AnyStateMachine = AnyStateMachine> {
-  readonly condition: Condition;
+/** Payload for removing one pending awakeable after its wait has ended. */
+export type UnsubscribeRequest = SubscribeRequest;
+
+export interface WaitForRequest {
+  readonly path: WaitPath;
   readonly timeout?: number;
-  readonly event?: EventFrom<M>;
 }
 
 export interface MachineVirtualObject<
@@ -143,7 +145,7 @@ export interface MachineVirtualObject<
   snapshot: (context: ObjectContext) => Promise<ReturnedSnapshot>;
   waitFor: (
     context: ObjectSharedContext,
-    request: WaitForRequest<M>,
+    request: WaitForRequest,
   ) => Promise<ReturnedSnapshot>;
   subscribe: (
     context: ObjectContext,
@@ -176,6 +178,10 @@ export interface MachineInternalVirtualObject<
     request: ScheduledEvent,
   ) => Promise<void>;
   initChild: (context: ObjectContext, request: InitRequest) => Promise<void>;
+  unsubscribe: (
+    context: ObjectContext,
+    request: UnsubscribeRequest,
+  ) => Promise<void>;
   cleanupFinalState: (
     context: ObjectContext,
     request: CleanupFinalStateRequest,

@@ -20,7 +20,7 @@ import {
   createDoneActorEvent,
   createNormalizedErrorActorEvent,
 } from "../xstate/actors";
-import { evaluateCondition, isValidCondition } from "../xstate/conditions";
+import { evaluateWaitPath, isValidWaitPath } from "../xstate/conditions";
 import { initialStep, resumeStep } from "../xstate/interpret";
 import { buildRegistry } from "../xstate/registry";
 import { fromStored, toReturnedSnapshot } from "../xstate/snapshot";
@@ -30,7 +30,7 @@ import type {
   Step,
   StoredState,
 } from "../xstate/types";
-import { parseContract, publicEventProblem } from "./contracts";
+import { publicEventProblem } from "./contracts";
 import {
   deriveEventSchema,
   deriveInputSchema,
@@ -39,6 +39,7 @@ import {
 import {
   executeEffects,
   maybeScheduleCleanup,
+  rejectSubscriptions,
   reportTerminal,
   settleSubscriptions,
 } from "./effects";
@@ -79,6 +80,7 @@ import type {
   ScheduledEvent,
   StandardSchema,
   SubscribeRequest,
+  UnsubscribeRequest,
   WaitForRequest,
 } from "./types";
 
@@ -107,7 +109,7 @@ const INTERNAL_LAZY_HANDLER_OPTIONS = {
  * - `create(input)` starts a new instance from its initial transition.
  * - `send(event)` applies an event and returns after the macrostep is persisted.
  * - `snapshot()` reads the current serializable snapshot.
- * - `subscribe(request)` resolves an awakeable when a condition is met.
+ * - `subscribe(request)` resolves an awakeable when a context path exists.
  * - `waitFor(request)` provides awakeable-backed long polling.
  *
  * Internal ingress-private handlers carry child initialization, actor results,
@@ -139,7 +141,7 @@ export function createMachineObject<
   const inputSerde = selectSerde(inputSchema);
   const eventSerde = selectSerde(eventSchema);
   const runtime = new MachineRuntime(name, machine, finalStateTTL);
-  const handlers = new MachineHandlers(runtime, eventSchema);
+  const handlers = new MachineHandlers(runtime);
 
   const definition = restate.object({
     name,
@@ -202,37 +204,46 @@ export function createMachineObject<
       ),
 
       /**
-       * Registers an existing Restate awakeable for a machine condition.
+       * Registers an existing Restate awakeable for a machine context path.
        *
        * This is the lower-level counterpart to `waitFor`. It resolves or
-       * rejects the awakeable immediately when the condition is already
+       * rejects the awakeable immediately when the path is already
        * decided; otherwise it stores the awakeable ID for settlement after a
        * later transition. It is exclusive because registration mutates state.
        */
       subscribe: restate.createObjectHandler(
         {
           description:
-            "Registers an awakeable for completion or a machine state-tag condition.",
+            "Registers an awakeable until a path exists in machine context.",
         },
         (context: restate.ObjectContext, request: SubscribeRequest) =>
           handlers.subscribe(context, request),
       ),
 
       /**
-       * Waits until the machine completes or enters a state with a given tag.
+       * Waits until a path exists in the machine context.
        *
        * The shared handler creates an awakeable, registers it through the
-       * exclusive `subscribe` handler, and optionally delivers an event only
-       * after registration to avoid missed transitions. A caller-supplied
-       * timeout is reported as a precondition failure.
+       * exclusive `subscribe` handler so registration and transitions cannot
+       * miss one another. A caller-supplied timeout bounds the wait.
        */
       waitFor: restate.createObjectSharedHandler(
         {
           description:
-            "Waits for completion or a state tag, optionally sending an event after subscribing.",
+            "Waits until an RFC 6901 path exists in the machine context.",
         },
-        (context: restate.ObjectSharedContext, request: WaitForRequest<M>) =>
+        (context: restate.ObjectSharedContext, request: WaitForRequest) =>
           handlers.waitFor(context, request),
+      ),
+
+      /** Removes a waiter whose shared `waitFor` invocation has ended. */
+      unsubscribe: restate.createObjectHandler(
+        {
+          ...INTERNAL_HANDLER_OPTIONS,
+          description: "Removes one pending context-path awakeable.",
+        },
+        (context: restate.ObjectContext, request: UnsubscribeRequest) =>
+          handlers.unsubscribe(context, request),
       ),
 
       // Internal handlers
@@ -407,10 +418,7 @@ export class MachineRuntime<M extends AnyStateMachine = AnyStateMachine> {
 
 /** Runtime-dependent handler behavior, independent of Restate definitions. */
 class MachineHandlers<M extends AnyStateMachine> {
-  constructor(
-    private readonly runtime: MachineRuntime<M>,
-    private readonly eventSchema: StandardSchema<EventFrom<M>> | undefined,
-  ) {}
+  constructor(private readonly runtime: MachineRuntime<M>) {}
 
   create(context: restate.ObjectContext, input: InputFrom<M>): Promise<void> {
     return initializeRoot(this.runtime, context, input);
@@ -440,12 +448,12 @@ class MachineHandlers<M extends AnyStateMachine> {
   ): Promise<void> {
     await validateNotDisposed(context);
     const stored = await getRequiredState(context);
-    validateCondition(request.condition);
+    validateWaitPath(request.path);
 
     const machine = this.runtime.resolveMachine(await getMachineId(context));
     const snapshot = fromStored(machine, stored);
     const returned = toReturnedSnapshot(snapshot);
-    const outcome = evaluateCondition(returned, request.condition);
+    const outcome = evaluateWaitPath(returned, request.path);
 
     if (outcome.status === "resolve") {
       context.resolveAwakeable(request.awakeableId, outcome.snapshot);
@@ -457,11 +465,11 @@ class MachineHandlers<M extends AnyStateMachine> {
     }
 
     const subscriptions = await getSubscriptions(context);
-    const existing = subscriptions[request.condition];
+    const existing = subscriptions[request.path];
     if (existing !== undefined) {
       existing.awakeables.push(request.awakeableId);
     } else {
-      subscriptions[request.condition] = {
+      subscriptions[request.path] = {
         awakeables: [request.awakeableId],
       };
     }
@@ -470,16 +478,9 @@ class MachineHandlers<M extends AnyStateMachine> {
 
   async waitFor(
     context: restate.ObjectSharedContext,
-    request: WaitForRequest<M>,
+    request: WaitForRequest,
   ): Promise<ReturnedSnapshot> {
-    await validateNotDisposed(context);
-    await getRequiredState(context);
-    validateCondition(request.condition);
-
-    const event =
-      request.event === undefined
-        ? undefined
-        : parsePublicEvent(this.eventSchema, request.event);
+    validateWaitPath(request.path);
     const { id, promise } = context.awakeable<ReturnedSnapshot>();
 
     const subscriber = context.objectClient<MachineInternalVirtualObject>(
@@ -487,17 +488,9 @@ class MachineHandlers<M extends AnyStateMachine> {
       context.key,
     );
     await subscriber.subscribe({
-      condition: request.condition,
+      path: request.path,
       awakeableId: id,
     });
-
-    if (event !== undefined) {
-      const sender = context.objectSendClient<MachineInternalVirtualObject>(
-        this.runtime.self,
-        context.key,
-      );
-      sender.deliverEvent(event);
-    }
 
     try {
       return request.timeout !== undefined
@@ -505,9 +498,27 @@ class MachineHandlers<M extends AnyStateMachine> {
         : await promise;
     } catch (error) {
       if (!(error instanceof restate.TerminalError)) throw error;
+      await subscriber.unsubscribe({ path: request.path, awakeableId: id });
       if (error.code !== 500) throw error;
       throw new restate.TerminalError(error.message, { errorCode: 412 });
     }
+  }
+
+  async unsubscribe(
+    context: restate.ObjectContext,
+    request: UnsubscribeRequest,
+  ): Promise<void> {
+    const subscriptions = await getSubscriptions(context);
+    const existing = subscriptions[request.path];
+    if (existing === undefined) return;
+
+    existing.awakeables = existing.awakeables.filter(
+      (awakeable) => awakeable !== request.awakeableId,
+    );
+    if (existing.awakeables.length === 0) {
+      delete subscriptions[request.path];
+    }
+    setSubscriptions(context, subscriptions);
   }
 
   initChild(
@@ -606,9 +617,12 @@ class MachineHandlers<M extends AnyStateMachine> {
     }
   }
 
-  cleanupState(context: restate.ObjectContext): Promise<void> {
+  async cleanupState(context: restate.ObjectContext): Promise<void> {
+    await rejectSubscriptions(
+      context,
+      "State machine was disposed before the path existed",
+    );
     markDisposedAndClear(context);
-    return Promise.resolve();
   }
 
   async cleanupFinalState(
@@ -616,6 +630,10 @@ class MachineHandlers<M extends AnyStateMachine> {
     request: CleanupFinalStateRequest,
   ): Promise<void> {
     if ((await getCleanupToken(context)) !== request.token) return;
+    await rejectSubscriptions(
+      context,
+      "State machine was disposed before the path existed",
+    );
     markDisposedAndClear(context);
   }
 }
@@ -648,6 +666,10 @@ async function initializeRoot<M extends AnyStateMachine>(
   context: restate.ObjectContext,
   input: InputFrom<M>,
 ): Promise<void> {
+  await rejectSubscriptions(
+    context,
+    "State machine was reset before the path existed",
+  );
   clearRuntimeState(context);
   clearIdentity(context);
 
@@ -664,6 +686,10 @@ async function initializeChild(
   context: restate.ObjectContext,
   request: InitRequest,
 ): Promise<void> {
+  await rejectSubscriptions(
+    context,
+    "State machine was reset before the path existed",
+  );
   clearRuntimeState(context);
   setIdentity(context, request);
 
@@ -804,23 +830,6 @@ async function getRequiredState(
   );
 }
 
-function parsePublicEvent<E extends AnyEventObject>(
-  schema: StandardSchema<E> | undefined,
-  event: E,
-): E {
-  const result = schema
-    ? parseContract(schema, event)
-    : { ok: true as const, value: event };
-  if (!result.ok) {
-    throw new restate.TerminalError(result.message, {
-      errorCode: result.kind === "invalid" ? 400 : 500,
-    });
-  }
-
-  validatePublicEvent(result.value);
-  return result.value;
-}
-
 function validatePublicEvent(event: unknown): asserts event is AnyEventObject {
   const problem = publicEventProblem(event);
   if (problem !== undefined) {
@@ -828,9 +837,9 @@ function validatePublicEvent(event: unknown): asserts event is AnyEventObject {
   }
 }
 
-function validateCondition(condition: string): void {
-  if (!isValidCondition(condition)) {
-    throw new restate.TerminalError("Invalid subscription condition", {
+function validateWaitPath(path: unknown): asserts path is `/${string}` {
+  if (!isValidWaitPath(path)) {
+    throw new restate.TerminalError("Invalid wait path", {
       errorCode: 400,
     });
   }

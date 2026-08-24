@@ -9,42 +9,67 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import type { Condition, ConditionOutcome, ReturnedSnapshot } from "./types";
+import type { ReturnedSnapshot, WaitOutcome, WaitPath } from "./types";
 
-const HAS_TAG = "hasTag:";
+const SNAPSHOT_CONTEXT_PREFIX = "/context";
+const ARRAY_INDEX = /^(?:0|[1-9][0-9]*)$/;
+const INVALID_ESCAPE = /~(?:[^01]|$)/;
 
-export function isValidCondition(condition: string): condition is Condition {
-  return condition === "done" || condition.startsWith(HAS_TAG);
+/** Whether a string is a non-root RFC 6901 JSON Pointer. */
+export function isValidWaitPath(path: unknown): path is WaitPath {
+  return (
+    typeof path === "string" &&
+    path.startsWith("/") &&
+    !INVALID_ESCAPE.test(path)
+  );
 }
 
 /**
- * Decide whether a wait condition is met by a settled snapshot. Pure: returns
+ * Decide whether a context path exists in a settled snapshot. Pure: returns
  * the decision (resolve/reject/pending); the caller performs any side effect
  * (e.g. resolving a Restate awakeable).
  */
-export function evaluateCondition(
+export function evaluateWaitPath(
   snapshot: ReturnedSnapshot,
-  condition: string,
-): ConditionOutcome {
+  path: WaitPath,
+): WaitOutcome {
+  if (jsonPointerExists(snapshot, `${SNAPSHOT_CONTEXT_PREFIX}${path}`)) {
+    return { status: "resolve", snapshot };
+  }
+
   if (snapshot.status === "error") {
     return { status: "reject", reason: "State machine returned an error" };
   }
 
-  if (
-    condition.startsWith(HAS_TAG) &&
-    snapshot.tags.includes(condition.slice(HAS_TAG.length))
-  ) {
-    return { status: "resolve", snapshot };
-  }
-
-  if (snapshot.status === "done") {
-    return condition === "done"
-      ? { status: "resolve", snapshot }
-      : {
-          status: "reject",
-          reason: "State machine completed without the condition being met",
-        };
+  if (snapshot.status !== "active") {
+    return {
+      status: "reject",
+      reason: "State machine completed before the path existed",
+    };
   }
 
   return { status: "pending" };
+}
+
+/** Return true only when every pointer token resolves to a concrete value. */
+function jsonPointerExists(document: unknown, pointer: string): boolean {
+  let current = document;
+
+  for (const encodedToken of pointer.slice(1).split("/")) {
+    const token = encodedToken.replaceAll("~1", "/").replaceAll("~0", "~");
+
+    if (Array.isArray(current)) {
+      if (!ARRAY_INDEX.test(token)) return false;
+      const index = Number(token);
+      if (!Number.isSafeInteger(index) || index >= current.length) return false;
+      current = current[index];
+      continue;
+    }
+
+    if (typeof current !== "object" || current === null) return false;
+    if (!Object.hasOwn(current, token)) return false;
+    current = (current as Record<string, unknown>)[token];
+  }
+
+  return true;
 }

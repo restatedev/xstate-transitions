@@ -27,4 +27,4 @@ export type {
   SubscribeRequest,
   WaitForRequest,
 } from "./restate/types";
-export type { Condition, ReturnedSnapshot, StoredState } from "./xstate/types";
+export type { ReturnedSnapshot, StoredState, WaitPath } from "./xstate/types";
