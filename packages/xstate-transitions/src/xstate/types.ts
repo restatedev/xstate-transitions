@@ -46,7 +46,7 @@ export interface ReturnedSnapshot {
 }
 
 /** A condition that `waitFor` can wait on. */
-export type Condition = "done" | `hasTag:${string}`;
+export type Condition = "done" | `/${string}`;
 
 /** The pure outcome of evaluating a wait condition against a settled snapshot. */
 export type ConditionOutcome =

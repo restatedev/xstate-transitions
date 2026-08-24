@@ -253,7 +253,7 @@ curl http://localhost:8080/orders/order-123/snapshot \
 
 # Wait at most 30 seconds for a durable context marker to exist.
 curl http://localhost:8080/orders/order-123/waitFor \
-  --json '{"condition":"hasTag:milestones/confirmed","timeout":30000}'
+  --json '{"condition":"/milestones/confirmed","timeout":30000}'
 ```
 
 You can also use a generated Restate client or the TypeScript SDK client. The
@@ -591,10 +591,10 @@ self-event. Do not use `setInterval` or a callback actor.
 
 ## Waiting for progress
 
-`waitFor` keeps its original condition syntax:
+`waitFor` accepts completion or a context-relative RFC 6901 path:
 
 ```ts
-type Condition = "done" | `hasTag:${string}`;
+type Condition = "done" | `/${string}`;
 ```
 
 The request contains the condition and an optional timeout. Event delivery is
@@ -602,15 +602,14 @@ deliberately not part of this request:
 
 ```ts
 await client.waitFor({
-  condition: "hasTag:milestones/confirmed",
+  condition: "/milestones/confirmed",
   timeout: 30_000,
 });
 ```
 
-`done` resolves when the snapshot status is `done`. Despite its compatibility
-name, `hasTag:<path>` no longer checks XState tags: the suffix is converted to
-the context-relative [RFC 6901 JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901)
-`/<path>`. For example, `hasTag:milestones/confirmed` checks
+`done` resolves when the snapshot status is `done`. A path condition is an
+[RFC 6901 JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) evaluated
+relative to machine context. For example, `/milestones/confirmed` checks
 `snapshot.context.milestones.confirmed`.
 
 A context condition resolves when its path identifies any value. Falsy values
@@ -743,7 +742,7 @@ repository, not every feature available in XState itself.
 | `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                        |
 | `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                                 |
 | `enq.stop(ref)` / invoke exit                      | Supported              | Stopped by explicit stop or when the invoking state exits     |
-| Condition-based `waitFor`                          | Integration feature    | Supports `done`; `hasTag:<path>` checks context existence     |
+| Condition-based `waitFor`                          | Integration feature    | Supports `done` and context-relative RFC 6901 paths           |
 | Ingress validation from `machine.schemas`          | Integration feature    | Real schemas validate/coerce ingress and appear in discovery  |
 | Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone       |
 | Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed                |
@@ -815,7 +814,7 @@ describeE2E("order workflow", (createActor) => {
       input: { sku: "ABC-42", quantity: 2 },
     });
 
-    const confirmed = order.waitFor("hasTag:milestones/confirmed");
+    const confirmed = order.waitFor("/milestones/confirmed");
     await order.send({ type: "SUBMIT" });
 
     await expect(confirmed).resolves.toMatchObject({
@@ -1211,7 +1210,7 @@ queue-removal primitive.
 `waitFor` is a shared handler so it can remain suspended without blocking the
 object's exclusive event handlers. It:
 
-1. validates `done` or the RFC 6901 suffix of `hasTag:<path>`;
+1. validates `done` or a context-relative RFC 6901 path;
 2. creates a Restate awakeable;
 3. calls the exclusive `subscribe` handler to evaluate or store it; and
 4. awaits the result, optionally with a timeout.
@@ -1346,8 +1345,8 @@ High-value invariants to preserve include:
 | `MachineObjectOptions` | Type     | Restate object options plus `finalStateTTL`                                 |
 | `StandardSchema`       | Type     | Library-neutral runtime-schema interface (the shape `schemas` entries take) |
 | `MachineVirtualObject` | Type     | Typed handler surface for SDK clients                                       |
-| `WaitForRequest`       | Type     | `done`/`hasTag:<path>` condition and optional timeout                       |
-| `Condition`            | Type     | `done` or compatibility syntax `hasTag:<path>`                              |
+| `WaitForRequest`       | Type     | `done`/RFC 6901 path condition and optional timeout                         |
+| `Condition`            | Type     | `done` or a context-relative path beginning with `/`                        |
 | `StoredState`          | Type     | Internal serializable snapshot representation                               |
 | `ReturnedSnapshot`     | Type     | Public serializable snapshot projection                                     |
 
@@ -1390,7 +1389,7 @@ All KV access is centralized in [`src/restate/state.ts`](src/restate/state.ts).
 
 | Status/code | Meaning                                                | Typical fix                                                      |
 | ----------- | ------------------------------------------------------ | ---------------------------------------------------------------- |
-| 400         | Invalid input, event, or wait condition                | Use `done` or `hasTag:<valid RFC 6901 path suffix>`              |
+| 400         | Invalid input, event, or wait condition                | Use `done` or a valid RFC 6901 path beginning with `/`           |
 | 404         | No machine at this object key                          | Call `create` before `send`, `snapshot`, or `waitFor`            |
 | 410         | Instance was disposed                                  | Use a new key or explicitly call `create` to start fresh         |
 | 412         | Wait condition became impossible                       | Handle completed/error outcome instead of retrying the condition |

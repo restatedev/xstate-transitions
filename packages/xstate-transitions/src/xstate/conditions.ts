@@ -12,7 +12,6 @@
 import type { Condition, ConditionOutcome, ReturnedSnapshot } from "./types";
 
 const SNAPSHOT_CONTEXT_PREFIX = "/context";
-const HAS_TAG_PREFIX = "hasTag:";
 const ARRAY_INDEX = /^(?:0|[1-9][0-9]*)$/;
 const INVALID_ESCAPE = /~(?:[^01]|$)/;
 
@@ -20,14 +19,12 @@ const INVALID_ESCAPE = /~(?:[^01]|$)/;
 export function isValidCondition(condition: unknown): condition is Condition {
   if (condition === "done") return true;
   if (typeof condition !== "string") return false;
-  if (!condition.startsWith(HAS_TAG_PREFIX)) return false;
-  return !INVALID_ESCAPE.test(condition.slice(HAS_TAG_PREFIX.length));
+  return condition.startsWith("/") && !INVALID_ESCAPE.test(condition);
 }
 
 /**
  * Decide whether a wait condition is met by a settled snapshot. `done` checks
- * the snapshot status. For compatibility, `hasTag:<path>` keeps its historical
- * spelling but now checks whether `/<path>` exists in machine context.
+ * the snapshot status; an RFC 6901 path checks existence in machine context.
  */
 export function evaluateCondition(
   snapshot: ReturnedSnapshot,
@@ -49,8 +46,7 @@ export function evaluateCondition(
     return { status: "pending" };
   }
 
-  const path = `/${condition.slice(HAS_TAG_PREFIX.length)}`;
-  if (jsonPointerExists(snapshot, `${SNAPSHOT_CONTEXT_PREFIX}${path}`)) {
+  if (jsonPointerExists(snapshot, `${SNAPSHOT_CONTEXT_PREFIX}${condition}`)) {
     return { status: "resolve", snapshot };
   }
 

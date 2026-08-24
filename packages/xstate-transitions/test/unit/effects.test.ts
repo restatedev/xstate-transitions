@@ -356,7 +356,7 @@ describe("settleSubscriptions", () => {
   it("settles existing context markers and keeps done pending", async () => {
     const harness = createHarness();
     harness.state.set("subscriptions", {
-      "hasTag:ready": { awakeables: ["ready-1", "ready-2"] },
+      "/ready": { awakeables: ["ready-1", "ready-2"] },
       done: { awakeables: ["done-1"] },
     });
     const snapshot = activeSnapshot({ context: { ready: false } });
@@ -376,7 +376,7 @@ describe("settleSubscriptions", () => {
     const harness = createHarness();
     harness.state.set("subscriptions", {
       done: { awakeables: ["done-1"] },
-      "hasTag:ready": { awakeables: ["ready-1"] },
+      "/ready": { awakeables: ["ready-1"] },
     });
 
     await settleSubscriptions(
@@ -394,7 +394,7 @@ describe("settleSubscriptions", () => {
   it("rejects and clears every waiter when an incarnation ends", async () => {
     const harness = createHarness();
     harness.state.set("subscriptions", {
-      "hasTag:first": { awakeables: ["first-1", "first-2"] },
+      "/first": { awakeables: ["first-1", "first-2"] },
       done: { awakeables: ["done-1"] },
     });
 

@@ -213,8 +213,7 @@ export function createMachineObject<
        */
       waitFor: restate.createObjectSharedHandler(
         {
-          description:
-            "Waits for completion or for a hasTag-prefixed context path to exist.",
+          description: "Waits for completion or for a context path to exist.",
         },
         (context: restate.ObjectSharedContext, request: WaitForRequest<M>) =>
           handlers.waitFor(context, request),

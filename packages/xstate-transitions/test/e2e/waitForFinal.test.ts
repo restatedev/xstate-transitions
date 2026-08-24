@@ -67,7 +67,7 @@ describeE2E("waitFor on an already-final instance", (createActor) => {
         context: { completed?: boolean };
       }>({ machine });
 
-      const waiting = actor.waitFor("hasTag:completed", 5_000);
+      const waiting = actor.waitFor("/completed", 5_000);
       await actor.send({ type: "GO" });
 
       await expect(waiting).resolves.toMatchObject({
@@ -84,7 +84,7 @@ describeE2E("waitFor on an already-final instance", (createActor) => {
       using actor = await createActor({ machine });
       await actor.send({ type: "GO" });
 
-      await expect(actor.waitFor("hasTag:missing")).rejects.toThrow(
+      await expect(actor.waitFor("/missing")).rejects.toThrow(
         "State machine completed without the condition being met",
       );
     },
@@ -96,7 +96,7 @@ describeE2E("waitFor on an already-final instance", (createActor) => {
     async () => {
       using actor = await createActor({ machine });
 
-      await expect(actor.waitFor("hasTag:missing", 100)).rejects.toThrow();
+      await expect(actor.waitFor("/missing", 100)).rejects.toThrow();
 
       // The exclusive unregister call must finish without blocking later work.
       await actor.send({ type: "GO" });

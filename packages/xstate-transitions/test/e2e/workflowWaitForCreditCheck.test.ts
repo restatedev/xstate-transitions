@@ -10,11 +10,10 @@
  */
 
 /*
- * Compatibility conditions backed by Restate awakeables. `hasTag:<path>` now
- * checks a durable context marker rather than XState tag membership, so the
- * instant `EvaluateDecision` state remains observable after the macrostep.
- * Event delivery remains a separate call from waiting, while `done` still
- * waits for machine completion.
+ * Context-path conditions backed by Restate awakeables make the instant
+ * `EvaluateDecision` state observable after the macrostep through a durable
+ * context marker. Event delivery remains a separate call from waiting, while
+ * `done` still waits for machine completion.
  */
 
 import { expect, it } from "vitest";
@@ -149,10 +148,10 @@ describeE2E("A credit check workflow", (createActor) => {
       employer: "MyCompany",
     };
 
-    await wf.waitFor("hasTag:WaitForInput");
+    await wf.waitFor("/WaitForInput");
 
-    const evaluated = wf.waitFor("hasTag:EvaluateDecision", 5_000);
-    const ended = wf.waitFor("hasTag:End", 5_000);
+    const evaluated = wf.waitFor("/EvaluateDecision", 5_000);
+    const ended = wf.waitFor("/End", 5_000);
     const done = wf.waitFor("done", 5_000);
     await wf.send({ type: "start", customer });
 
@@ -168,7 +167,7 @@ describeE2E("A credit check workflow", (createActor) => {
       output: { decision: "Approved" },
     });
 
-    await expect(wf.waitFor("hasTag:EvaluateDecision")).resolves.toMatchObject({
+    await expect(wf.waitFor("/EvaluateDecision")).resolves.toMatchObject({
       context: { EvaluateDecision: true },
     });
   });

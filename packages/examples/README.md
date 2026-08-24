@@ -43,7 +43,7 @@ curl http://localhost:8080/greeting/greet-1/snapshot --json '{}'
 # Order: schemas give a typed event surface; wait for a durable context marker.
 curl http://localhost:8080/orders/order-1/create --json '{"sku":"ABC-42","quantity":2}'
 curl http://localhost:8080/orders/order-1/send   --json '{"type":"SUBMIT"}'
-curl http://localhost:8080/orders/order-1/waitFor --json '{"condition":"hasTag:milestones/confirmed","timeout":30000}'
+curl http://localhost:8080/orders/order-1/waitFor --json '{"condition":"/milestones/confirmed","timeout":30000}'
 
 # Auction: bid, then read the winner after the bidding window closes.
 curl http://localhost:8080/auction/car-1/create --json '{}'

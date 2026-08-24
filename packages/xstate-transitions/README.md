@@ -69,9 +69,9 @@ supports:
 
 - **Delayed transitions** (`after`) and delayed events, with **cancellation**
   (`cancel(id)`), via guarded Restate delayed self-sends.
-- **`waitFor`** with compatible `done` / `hasTag:<path>` conditions, backed by
-  Restate awakeables. `hasTag:` now addresses durable machine context rather
-  than XState tags; existence includes falsy and `null` marker values.
+- **`waitFor`** with `done` or context-relative RFC 6901 path conditions,
+  backed by Restate awakeables. Path existence includes falsy and `null`
+  marker values.
 - **Ingress validation from the machine's own `schemas`** — real
   [Standard Schema](https://standardschema.dev/) validators (e.g. Zod 4) on
   `schemas.input` / `schemas.events` validate and coerce `create` and `send`,
