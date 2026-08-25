@@ -12,7 +12,12 @@
 import * as restate from "@restatedev/restate-sdk";
 import { normalizeError } from "../xstate/actors";
 import { evaluateCondition } from "../xstate/conditions";
-import type { Effect, ReturnedSnapshot, Target } from "../xstate/types";
+import type {
+  Condition,
+  Effect,
+  ReturnedSnapshot,
+  Target,
+} from "../xstate/types";
 import {
   getActorExecutions,
   getChildren,
@@ -174,7 +179,7 @@ function assertNever(value: never): never {
   throw new Error(`Unsupported effect: ${JSON.stringify(value)}`);
 }
 
-/** Resolve/reject awakeables whose condition is now decided by the snapshot. */
+/** Resolve/reject awakeables whose condition is decided by the snapshot. */
 export async function settleSubscriptions(
   handler: HandlerContext,
   returned: ReturnedSnapshot,
@@ -184,7 +189,7 @@ export async function settleSubscriptions(
 
   let changed = false;
   for (const [condition, subscription] of Object.entries(subscriptions)) {
-    const outcome = evaluateCondition(returned, condition);
+    const outcome = evaluateCondition(returned, condition as Condition);
     if (outcome.status === "pending") continue;
     for (const awakeable of subscription.awakeables) {
       if (outcome.status === "resolve") {
@@ -198,6 +203,22 @@ export async function settleSubscriptions(
   }
 
   if (changed) setSubscriptions(ctx, subscriptions);
+}
+
+/** Reject and clear every waiter tied to the current machine incarnation. */
+export async function rejectSubscriptions(
+  ctx: restate.ObjectContext,
+  reason: string,
+): Promise<void> {
+  const subscriptions = await getSubscriptions(ctx);
+  if (Object.keys(subscriptions).length === 0) return;
+
+  for (const subscription of Object.values(subscriptions)) {
+    for (const awakeable of subscription.awakeables) {
+      ctx.rejectAwakeable(awakeable, reason);
+    }
+  }
+  setSubscriptions(ctx, {});
 }
 
 /** If this is a child instance, report its terminal state back to the parent. */

@@ -124,15 +124,18 @@ export interface Subscription {
   awakeables: string[];
 }
 
+/** @internal Payload for the exclusive wait-registration handler. */
 export interface SubscribeRequest {
   readonly condition: Condition;
   readonly awakeableId: string;
 }
 
-export interface WaitForRequest<M extends AnyStateMachine = AnyStateMachine> {
+/** Payload for removing one pending awakeable after its wait has ended. */
+export type UnsubscribeRequest = SubscribeRequest;
+
+export interface WaitForRequest<_M extends AnyStateMachine = AnyStateMachine> {
   readonly condition: Condition;
   readonly timeout?: number;
-  readonly event?: EventFrom<M>;
 }
 
 export interface MachineVirtualObject<
@@ -145,10 +148,6 @@ export interface MachineVirtualObject<
     context: ObjectSharedContext,
     request: WaitForRequest<M>,
   ) => Promise<ReturnedSnapshot>;
-  subscribe: (
-    context: ObjectContext,
-    request: SubscribeRequest,
-  ) => Promise<void>;
 }
 
 /** @internal The complete handler surface used by the Restate runtime. */
@@ -176,6 +175,14 @@ export interface MachineInternalVirtualObject<
     request: ScheduledEvent,
   ) => Promise<void>;
   initChild: (context: ObjectContext, request: InitRequest) => Promise<void>;
+  subscribe: (
+    context: ObjectContext,
+    request: SubscribeRequest,
+  ) => Promise<void>;
+  unsubscribe: (
+    context: ObjectContext,
+    request: UnsubscribeRequest,
+  ) => Promise<void>;
   cleanupFinalState: (
     context: ObjectContext,
     request: CleanupFinalStateRequest,

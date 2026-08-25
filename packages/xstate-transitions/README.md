@@ -69,13 +69,13 @@ supports:
 
 - **Delayed transitions** (`after`) and delayed events, with **cancellation**
   (`cancel(id)`), via guarded Restate delayed self-sends.
-- **`waitFor` / `subscribe`** on `done` / `hasTag:*` conditions, backed by
-  Restate awakeables, plus tag exposure on snapshots.
+- **`waitFor`** with `done` or context-relative RFC 6901 path conditions,
+  backed by Restate awakeables. Path existence includes falsy and `null`
+  marker values.
 - **Ingress validation from the machine's own `schemas`** — real
   [Standard Schema](https://standardschema.dev/) validators (e.g. Zod 4) on
-  `schemas.input` / `schemas.events` validate and coerce `create`, `send`, and
-  the optional event carried by `waitFor`, and surface as JSON Schemas in Restate
-  discovery.
+  `schemas.input` / `schemas.events` validate and coerce `create` and `send`,
+  and surface as JSON Schemas in Restate discovery.
 - **`finalStateTTL`** disposal of completed instances.
 - **Cross-machine messaging**: `invoke` / `spawn` of a child machine runs it as
   its own virtual object (keyed `${parent}::${childId}`), with `enq.sendTo` to a

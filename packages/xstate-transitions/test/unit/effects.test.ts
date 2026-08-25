@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   executeEffects,
   maybeScheduleCleanup,
+  rejectSubscriptions,
   reportTerminal,
   settleSubscriptions,
 } from "../../src/restate/effects";
@@ -352,13 +353,13 @@ describe("executeEffects", () => {
 });
 
 describe("settleSubscriptions", () => {
-  it("settles decided conditions and keeps pending conditions", async () => {
+  it("settles existing context markers and keeps done pending", async () => {
     const harness = createHarness();
     harness.state.set("subscriptions", {
-      "hasTag:ready": { awakeables: ["ready-1", "ready-2"] },
+      "/ready": { awakeables: ["ready-1", "ready-2"] },
       done: { awakeables: ["done-1"] },
     });
-    const snapshot = activeSnapshot({ tags: ["ready"] });
+    const snapshot = activeSnapshot({ context: { ready: false } });
 
     await settleSubscriptions(harness.handler, snapshot);
 
@@ -371,11 +372,11 @@ describe("settleSubscriptions", () => {
     });
   });
 
-  it("rejects every pending condition when the machine errors", async () => {
+  it("rejects every unresolved condition when the machine errors", async () => {
     const harness = createHarness();
     harness.state.set("subscriptions", {
       done: { awakeables: ["done-1"] },
-      "hasTag:ready": { awakeables: ["ready-1"] },
+      "/ready": { awakeables: ["ready-1"] },
     });
 
     await settleSubscriptions(
@@ -386,6 +387,23 @@ describe("settleSubscriptions", () => {
     expect(harness.rejected).toEqual([
       { id: "done-1", reason: "State machine returned an error" },
       { id: "ready-1", reason: "State machine returned an error" },
+    ]);
+    expect(harness.state.get("subscriptions")).toEqual({});
+  });
+
+  it("rejects and clears every waiter when an incarnation ends", async () => {
+    const harness = createHarness();
+    harness.state.set("subscriptions", {
+      "/first": { awakeables: ["first-1", "first-2"] },
+      done: { awakeables: ["done-1"] },
+    });
+
+    await rejectSubscriptions(harness.handler.ctx, "Machine was reset");
+
+    expect(harness.rejected).toEqual([
+      { id: "first-1", reason: "Machine was reset" },
+      { id: "first-2", reason: "Machine was reset" },
+      { id: "done-1", reason: "Machine was reset" },
     ]);
     expect(harness.state.get("subscriptions")).toEqual({});
   });

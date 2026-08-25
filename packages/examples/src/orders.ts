@@ -21,8 +21,8 @@
  * It also shows the pieces you reach for in a real durable workflow:
  *   - `fromHandler` for a ctx-aware effect journaled with `ctx.run`;
  *   - `onDone` / `onError` branches from a single invoke;
- *   - a `final` state with `tags` and `output`, which `waitFor("hasTag:ready")`
- *     and the returned snapshot expose.
+ *   - a durable context milestone that `waitFor({ condition })` can observe
+ *     even after the machine has moved on.
  *
  * This example uses real Zod schemas in `schemas`, so `createMachineObject`
  * derives the ingress serdes automatically — validating and coercing
@@ -66,6 +66,7 @@ export const orderMachine = setup({
       OrderInput & {
         reservationId: string | null;
         failure: { name: string; message: string } | null;
+        milestones: { confirmed?: true };
       }
     >(),
     events: {
@@ -85,6 +86,7 @@ export const orderMachine = setup({
     ...input,
     reservationId: null,
     failure: null,
+    milestones: {},
   }),
   states: {
     draft: {
@@ -103,7 +105,10 @@ export const orderMachine = setup({
         }),
         onDone: {
           target: "confirmed",
-          context: ({ output }) => ({ reservationId: output.reservationId }),
+          context: ({ context, output }) => ({
+            reservationId: output.reservationId,
+            milestones: { ...context.milestones, confirmed: true },
+          }),
         },
         onError: {
           target: "failed",
@@ -115,7 +120,6 @@ export const orderMachine = setup({
     },
     confirmed: {
       type: "final",
-      tags: ["ready"],
       output: ({ context }) => ({ reservationId: context.reservationId }),
     },
     cancelled: { type: "final" },

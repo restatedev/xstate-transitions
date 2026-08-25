@@ -98,9 +98,7 @@ describeE2E("Actor execution generations", (createActor) => {
       });
 
       current.resolve("current");
-      await expect(
-        actor.waitFor("done", undefined, 5_000),
-      ).resolves.toMatchObject({
+      await expect(actor.waitFor("done", 5_000)).resolves.toMatchObject({
         status: "done",
         value: "done",
         context: { generation: 2, result: "current" },
@@ -137,9 +135,7 @@ describeE2E("Actor execution generations", (createActor) => {
       });
 
       current.resolve("current");
-      await expect(
-        actor.waitFor("done", undefined, 5_000),
-      ).resolves.toMatchObject({
+      await expect(actor.waitFor("done", 5_000)).resolves.toMatchObject({
         status: "done",
         value: "done",
         context: { generation: 2, result: "current" },

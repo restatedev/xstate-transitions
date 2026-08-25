@@ -10,13 +10,10 @@
  */
 
 /*
- * Server-side conditions backed by Restate awakeables:
- *  - waitFor("hasTag:WaitForInput") resolves on the start node's tag;
- *  - waitFor("done", startEvent) sends an event and awaits final -> output.decision === "Approved";
- *  - waitFor("hasTag:EvaluateDecision") rejects "State machine completed without the
- *    condition being met" (that state is transited-through instantaneously, never observed
- *    as a settled macrostep);
- *  - waitFor("hasTag:End") resolves on the final state.
+ * Context-path conditions backed by Restate awakeables make the instant
+ * `EvaluateDecision` state observable after the macrostep through a durable
+ * context marker. Event delivery remains a separate call from waiting, while
+ * `done` still waits for machine completion.
  */
 
 import { expect, it } from "vitest";
@@ -38,6 +35,9 @@ const workflow = setup({
     context: types<{
       customer: Customer | null;
       creditCheck: { decision: "Approved" | "Denied" } | null;
+      WaitForInput: true;
+      EvaluateDecision?: true;
+      End?: true;
     }>(),
     input: types<{ customer: Customer }>(),
     events: {
@@ -70,7 +70,11 @@ const workflow = setup({
 }).createMachine({
   id: "customercreditcheck",
   initial: "WaitForInput",
-  context: () => ({ customer: null, creditCheck: null }),
+  context: () => ({
+    customer: null,
+    creditCheck: null,
+    WaitForInput: true as const,
+  }),
   states: {
     WaitForInput: {
       on: {
@@ -79,7 +83,6 @@ const workflow = setup({
           target: "CheckCredit",
         },
       },
-      tags: ["WaitForInput"],
     },
     CheckCredit: {
       invoke: {
@@ -87,7 +90,10 @@ const workflow = setup({
         input: ({ context }) => ({ customer: context.customer! }),
         onDone: {
           target: "EvaluateDecision",
-          context: ({ output }) => ({ creditCheck: output }),
+          context: ({ output }) => ({
+            creditCheck: output,
+            EvaluateDecision: true,
+          }),
         },
       },
       // PT15M (15 minutes) in the spec.
@@ -98,7 +104,6 @@ const workflow = setup({
         context.creditCheck?.decision === "Approved"
           ? { target: "StartApplication" }
           : { target: "RejectApplication" },
-      tags: ["EvaluateDecision"],
     },
     StartApplication: {
       invoke: {
@@ -114,7 +119,10 @@ const workflow = setup({
         onDone: { target: "End" },
       },
     },
-    End: { type: "final", tags: ["End"] },
+    End: {
+      type: "final",
+      entry: () => ({ context: { End: true } }),
+    },
     Timeout: {},
   },
   output: ({ context }) => ({ decision: context.creditCheck?.decision }),
@@ -122,9 +130,14 @@ const workflow = setup({
 
 describeE2E("A credit check workflow", (createActor) => {
   it("Will complete successfully", { timeout: 60_000 }, async () => {
-    using wf = await createActor<{ output?: { decision?: string } }>({
-      machine: workflow,
-    });
+    using wf = await createActor<{
+      output?: { decision?: string };
+      context: {
+        WaitForInput: true;
+        EvaluateDecision?: true;
+        End?: true;
+      };
+    }>({ machine: workflow });
 
     const customer: Customer = {
       id: "customer123",
@@ -135,20 +148,27 @@ describeE2E("A credit check workflow", (createActor) => {
       employer: "MyCompany",
     };
 
-    await wf.waitFor("hasTag:WaitForInput");
+    await wf.waitFor("/WaitForInput");
 
-    await Promise.all([
-      expect(
-        wf.waitFor("done", { type: "start", customer }),
-      ).resolves.toMatchObject({ output: { decision: "Approved" } }),
+    const evaluated = wf.waitFor("/EvaluateDecision", 5_000);
+    const ended = wf.waitFor("/End", 5_000);
+    const done = wf.waitFor("done", 5_000);
+    await wf.send({ type: "start", customer });
 
-      expect(wf.waitFor("hasTag:EvaluateDecision")).rejects.toThrow(
-        "State machine completed without the condition being met",
-      ),
+    await expect(evaluated).resolves.toMatchObject({
+      context: { EvaluateDecision: true },
+    });
+    await expect(ended).resolves.toMatchObject({
+      context: { End: true },
+      output: { decision: "Approved" },
+    });
+    await expect(done).resolves.toMatchObject({
+      status: "done",
+      output: { decision: "Approved" },
+    });
 
-      expect(wf.waitFor("hasTag:End")).resolves.toMatchObject({
-        output: { decision: "Approved" },
-      }),
-    ]);
+    await expect(wf.waitFor("/EvaluateDecision")).resolves.toMatchObject({
+      context: { EvaluateDecision: true },
+    });
   });
 });

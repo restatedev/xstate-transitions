@@ -25,58 +25,107 @@ const snap = (over: Partial<ReturnedSnapshot>): ReturnedSnapshot => ({
 });
 
 describe("isValidCondition", () => {
-  it("accepts done and hasTag:*", () => {
+  it("accepts done and RFC 6901 paths", () => {
     expect(isValidCondition("done")).toBe(true);
-    expect(isValidCondition("hasTag:ready")).toBe(true);
+    expect(isValidCondition("/ready")).toBe(true);
+    expect(isValidCondition("/nested/value")).toBe(true);
+    expect(isValidCondition("/a~1b/m~0n")).toBe(true);
+    expect(isValidCondition("/")).toBe(true);
   });
-  it("rejects anything else", () => {
-    expect(isValidCondition("bogus")).toBe(false);
-    expect(isValidCondition("hasTags:x")).toBe(false);
+
+  it("rejects unsupported and incorrectly escaped conditions", () => {
     expect(isValidCondition("")).toBe(false);
+    expect(isValidCondition(undefined)).toBe(false);
+    expect(isValidCondition(42)).toBe(false);
+    expect(isValidCondition("ready")).toBe(false);
+    expect(isValidCondition("hasTag:ready")).toBe(false);
+    expect(isValidCondition("/bad~2escape")).toBe(false);
+    expect(isValidCondition("/trailing~")).toBe(false);
   });
 });
 
 describe("evaluateCondition", () => {
-  it("is pending while active with no matching tag", () => {
-    expect(evaluateCondition(snap({}), "done")).toEqual({ status: "pending" });
-    expect(evaluateCondition(snap({ tags: ["a"] }), "hasTag:b")).toEqual({
+  it("keeps done pending while the machine is active", () => {
+    expect(evaluateCondition(snap({}), "done")).toEqual({
       status: "pending",
     });
   });
 
-  it("resolves 'done' when the snapshot is done", () => {
-    const s = snap({ status: "done", output: { ok: 1 } });
+  it("resolves done when the snapshot is done", () => {
+    const s = snap({ status: "done", output: { ok: true } });
     expect(evaluateCondition(s, "done")).toEqual({
       status: "resolve",
       snapshot: s,
     });
   });
 
-  it("resolves 'hasTag:x' when the tag is present", () => {
-    const s = snap({ tags: ["x", "y"] });
-    expect(evaluateCondition(s, "hasTag:x")).toEqual({
+  it("uses context paths rather than XState tags", () => {
+    expect(
+      evaluateCondition(snap({ context: {}, tags: ["ready"] }), "/ready"),
+    ).toEqual({ status: "pending" });
+  });
+
+  it.each([
+    ["false", false],
+    ["zero", 0],
+    ["empty string", ""],
+    ["null", null],
+  ])("treats an existing %s value as resolved", (_label, value) => {
+    const s = snap({ context: { result: value } });
+    expect(evaluateCondition(s, "/result")).toEqual({
       status: "resolve",
       snapshot: s,
     });
   });
 
-  it("rejects when the machine completes without meeting a tag condition", () => {
-    const s = snap({ status: "done", tags: [] });
-    expect(evaluateCondition(s, "hasTag:x")).toEqual({
+  it("resolves nested, escaped, and array paths", () => {
+    const s = snap({
+      context: {
+        nested: { "a/b": { "m~n": [false] } },
+      },
+    });
+    expect(evaluateCondition(s, "/nested/a~1b/m~0n/0")).toEqual({
+      status: "resolve",
+      snapshot: s,
+    });
+  });
+
+  it("does not accept leading-zero or out-of-range array indices", () => {
+    const s = snap({ context: { values: ["present"] } });
+    expect(evaluateCondition(s, "/values/01")).toEqual({
+      status: "pending",
+    });
+    expect(evaluateCondition(s, "/values/1")).toEqual({
+      status: "pending",
+    });
+    expect(evaluateCondition(s, "/values/-")).toEqual({
+      status: "pending",
+    });
+  });
+
+  it("rejects when the machine completes before a marker exists", () => {
+    const s = snap({ status: "done", context: {} });
+    expect(evaluateCondition(s, "/result")).toEqual({
       status: "reject",
       reason: "State machine completed without the condition being met",
     });
   });
 
-  it("rejects on an error snapshot regardless of condition", () => {
-    const s = snap({ status: "error" });
-    expect(evaluateCondition(s, "done").status).toBe("reject");
-    expect(evaluateCondition(s, "hasTag:x").status).toBe("reject");
+  it("rejects error snapshots for unresolved conditions", () => {
+    const s = snap({ status: "error", context: {} });
+    expect(evaluateCondition(s, "done")).toEqual({
+      status: "reject",
+      reason: "State machine returned an error",
+    });
+    expect(evaluateCondition(s, "/result")).toEqual({
+      status: "reject",
+      reason: "State machine returned an error",
+    });
   });
 
-  it("prefers a matched tag even on a final state", () => {
-    const s = snap({ status: "done", tags: ["End"] });
-    expect(evaluateCondition(s, "hasTag:End")).toEqual({
+  it("prefers an existing path even on a terminal snapshot", () => {
+    const s = snap({ status: "done", context: { result: null } });
+    expect(evaluateCondition(s, "/result")).toEqual({
       status: "resolve",
       snapshot: s,
     });

@@ -35,11 +35,7 @@ export type RunningMachine<SnapshotType> = {
   create: (input?: unknown) => Promise<void>;
   send: (event: AnyEventObject) => Promise<void>;
   snapshot(): Promise<SnapshotType>;
-  waitFor(
-    condition: Condition,
-    event?: AnyEventObject,
-    timeout?: number,
-  ): Promise<SnapshotType>;
+  waitFor(condition: Condition, timeout?: number): Promise<SnapshotType>;
   [Symbol.dispose](): void;
 };
 
@@ -75,7 +71,6 @@ export async function createRestateTestActor<
       snapshot: () => Promise<unknown>;
       waitFor: (req: {
         condition: Condition;
-        event?: AnyEventObject;
         timeout?: number;
       }) => Promise<unknown>;
     };
@@ -92,14 +87,9 @@ export async function createRestateTestActor<
         return (await client.snapshot()) as SnapshotType;
       },
 
-      waitFor: async (
-        condition: Condition,
-        event?: AnyEventObject,
-        timeout?: number,
-      ) => {
+      waitFor: async (condition: Condition, timeout?: number) => {
         return (await client.waitFor({
           condition,
-          ...(event === undefined ? {} : { event }),
           ...(timeout === undefined ? {} : { timeout }),
         })) as SnapshotType;
       },

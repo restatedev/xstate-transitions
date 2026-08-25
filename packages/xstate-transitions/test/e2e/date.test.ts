@@ -62,7 +62,9 @@ describeE2E("Date machine", (createActor) => {
       }>({ machine: dateMachine });
 
       const before = Date.now();
-      const snap = await machine.waitFor("done", { type: "submit" });
+      const waiting = machine.waitFor("done", 5_000);
+      await machine.send({ type: "submit" });
+      const snap = await waiting;
       const after = Date.now();
 
       // The transition captured a native Date.now() within this call window.

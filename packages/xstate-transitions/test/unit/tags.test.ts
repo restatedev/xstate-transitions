@@ -12,11 +12,11 @@
 /*
  * Tag derivation across transitions, ported from upstream xstate `tags.test.ts`.
  *
- * Tags back our `hasTag:*` wait condition and are exposed on every returned
- * snapshot. Because the snapshot is persisted and rehydrated on each request,
- * tags must be RE-DERIVED from the current (rehydrated) state value after each
- * transition — never carried over stale. These tests round-trip the persisted
- * state between steps so tag recomputation runs against the rehydrated value.
+ * Tags are exposed on every returned snapshot. Because the snapshot is
+ * persisted and rehydrated on each request, tags must be RE-DERIVED from the
+ * current state value after each transition — never carried over stale. These
+ * tests round-trip the persisted state between steps so tag recomputation runs
+ * against the rehydrated value.
  */
 
 import { describe, expect, it } from "vitest";

@@ -100,6 +100,7 @@ type OrderInput = z.infer<typeof OrderInputSchema>;
 interface OrderContext extends OrderInput {
   reservationId?: string;
   failure?: { name: string; message: string };
+  milestones: { confirmed?: true };
 }
 
 interface ReserveInput {
@@ -147,7 +148,7 @@ export const orderMachine = setup({
 }).createMachine({
   id: "order-v1",
   initial: "draft",
-  context: ({ input }) => ({ ...input }),
+  context: ({ input }) => ({ ...input, milestones: {} }),
   states: {
     draft: {
       on: {
@@ -165,7 +166,10 @@ export const orderMachine = setup({
         }),
         onDone: {
           target: "confirmed",
-          context: ({ output }) => ({ reservationId: output.reservationId }),
+          context: ({ context, output }) => ({
+            reservationId: output.reservationId,
+            milestones: { ...context.milestones, confirmed: true },
+          }),
         },
         onError: {
           target: "failed",
@@ -177,7 +181,6 @@ export const orderMachine = setup({
     },
     confirmed: {
       type: "final",
-      tags: ["ready"],
     },
     cancelled: { type: "final" },
     failed: { type: "final" },
@@ -226,8 +229,8 @@ Then register the deployment at `http://localhost:9080` in Restate's UI at
 
 ## Calling a machine
 
-The public handler surface is `create`, `send`, `snapshot`, `waitFor`, and the
-lower-level `subscribe` handler. The URL shape through Restate ingress is:
+The public handler surface is `create`, `send`, `snapshot`, and `waitFor`. The
+URL shape through Restate ingress is:
 
 ```text
 /{service-name}/{object-key}/{handler-name}
@@ -248,9 +251,9 @@ curl http://localhost:8080/orders/order-123/send \
 curl http://localhost:8080/orders/order-123/snapshot \
   --json '{}'
 
-# Wait at most 30 seconds for a settled snapshot carrying the ready tag.
+# Wait at most 30 seconds for a durable context marker to exist.
 curl http://localhost:8080/orders/order-123/waitFor \
-  --json '{"condition":"hasTag:ready","timeout":30000}'
+  --json '{"condition":"/milestones/confirmed","timeout":30000}'
 ```
 
 You can also use a generated Restate client or the TypeScript SDK client. The
@@ -273,10 +276,10 @@ sync.
 
 The current integration consumes two entries:
 
-| XState v6 entry  | Restate boundary                                                         |
-| ---------------- | ------------------------------------------------------------------------ |
-| `schemas.input`  | Validates/coerces `create` input and describes it in service discovery   |
-| `schemas.events` | Validates/coerces `send` and `waitFor.event`; describes `send` discovery |
+| XState v6 entry  | Restate boundary                                                       |
+| ---------------- | ---------------------------------------------------------------------- |
+| `schemas.input`  | Validates/coerces `create` input and describes it in service discovery |
+| `schemas.events` | Validates/coerces `send`; describes `send` discovery                   |
 
 Other entries, such as `schemas.context`, remain XState concerns; this
 integration does not turn them into public handler serdes. In particular, an
@@ -312,8 +315,6 @@ With real schemas in place:
 
 - `create` validates and coerces machine input before initialization;
 - `send` validates and coerces the public event before state mutation;
-- `waitFor.event` is validated with the same event schema before an awakeable is
-  registered;
 - the input and event JSON Schemas appear in the discovery manifest; and
 - validation failures are terminal status 400 errors.
 
@@ -590,42 +591,49 @@ self-event. Do not use `setInterval` or a callback actor.
 
 ## Waiting for progress
 
-`waitFor` supports two condition forms:
+`waitFor` accepts completion or a context-relative RFC 6901 path:
 
 ```ts
-type Condition = "done" | `hasTag:${string}`;
+type Condition = "done" | `/${string}`;
 ```
 
-- `done` resolves when the machine's settled snapshot has status `done`.
-- `hasTag:ready` resolves when the settled snapshot has the `ready` tag.
-
-The request can contain a timeout and an event:
+The request contains the condition and an optional timeout. Event delivery is
+deliberately not part of this request:
 
 ```ts
 await client.waitFor({
-  condition: "hasTag:ready",
-  event: { type: "SUBMIT" },
+  condition: "/milestones/confirmed",
   timeout: 30_000,
 });
 ```
 
-When an event is supplied, the integration registers the subscription before
-sending the event. This ordering prevents a fast transition from satisfying the
-condition before the waiter exists.
+`done` resolves when the snapshot status is `done`. A path condition is an
+[RFC 6901 JSON Pointer](https://datatracker.ietf.org/doc/html/rfc6901) evaluated
+relative to machine context. For example, `/milestones/confirmed` checks
+`snapshot.context.milestones.confirmed`.
 
-Conditions are checked against settled snapshots. A tag that is entered and
-left within a single macrostep may not be observable. If the machine reaches
-`done` without the requested tag, that tag condition rejects. An error snapshot
-rejects every pending condition.
+A context condition resolves when its path identifies any value. Falsy values
+(`false`, `0`, `""`) and `null` count as present. Missing object members,
+invalid array indices, and paths blocked by a primitive remain pending. Use
+`~0` for a literal `~` and `~1` for a literal `/` in an object key.
 
-`subscribe` is the low-level building block for integrating an existing Restate
-awakeable. Most callers should use `waitFor`, which creates and awaits the
-awakeable for them.
+Machine authors should leave progress markers in context for the remainder of
+the machine incarnation. This makes a milestone observable even when the
+caller starts waiting after the transition that produced it. If a terminal
+snapshot does not contain the requested marker, the wait rejects because that
+incarnation can no longer make it appear.
 
-A timed-out waiter is not currently removed from the durable subscription map
-immediately. Its entry is removed when the condition is later decided or the
-instance is reset. Prefer bounded waits, and account for this behavior when a
-condition may remain pending indefinitely.
+Event delivery stays separate from waiting. The shared `waitFor` handler calls
+an exclusive `subscribe` handler that rechecks the latest snapshot before
+storing the awakeable. Therefore either the transition runs first and
+registration observes its marker, or registration runs first and the
+transition settles the stored waiter.
+
+`subscribe` is ingress-private and exists only as the exclusive registration
+step used by `waitFor`, which creates and awaits the awakeable for callers.
+
+A timed-out waiter unregisters its awakeable from durable state. Reset and
+disposal reject and clear waiters belonging to the old machine incarnation.
 
 ## Child machines and messaging
 
@@ -734,7 +742,7 @@ repository, not every feature available in XState itself.
 | `after`, delayed `enq.raise`, delayed `enq.sendTo` | Supported              | Implemented with Restate delayed calls                        |
 | `enq.cancel(id)`                                   | Supported              | Uses a durable delivery token                                 |
 | `enq.stop(ref)` / invoke exit                      | Supported              | Stopped by explicit stop or when the invoking state exits     |
-| `waitFor` and tags                                 | Integration feature    | Conditions are `done` and `hasTag:<tag>`                      |
+| Condition-based `waitFor`                          | Integration feature    | Supports `done` and context-relative RFC 6901 paths           |
 | Ingress validation from `machine.schemas`          | Integration feature    | Real schemas validate/coerce ingress and appear in discovery  |
 | Repeated `create`                                  | Reset with caveat      | Stale actor results are ignored; effects are not undone       |
 | Arbitrary executable XState actions (`enq(fn)`)    | **Not supported**      | Unknown/custom action effects are not executed                |
@@ -806,9 +814,10 @@ describeE2E("order workflow", (createActor) => {
       input: { sku: "ABC-42", quantity: 2 },
     });
 
+    const confirmed = order.waitFor("/milestones/confirmed");
     await order.send({ type: "SUBMIT" });
 
-    await expect(order.waitFor("done")).resolves.toMatchObject({
+    await expect(confirmed).resolves.toMatchObject({
       status: "done",
       value: "confirmed",
     });
@@ -909,7 +918,7 @@ flowchart TD
     Effects --> Timer["Delayed self-call"]
     Effects --> Child["Child object instance"]
     Effects --> Message["Self / parent / child send"]
-    Step --> Waiters["Settle subscriptions"]
+    Step --> Waiters["Settle condition waiters"]
     Actor --> ActorResult["actorDone / actorError"]
     Child --> ActorResult
     Timer --> DomainEvent["deliverEvent"]
@@ -1015,7 +1024,7 @@ sequenceDiagram
     R-->>H: recorded Step
     H->>R: set nextState
     H->>E: execute effects in order
-    H->>R: settle subscriptions
+    H->>R: settle condition waiters
     H->>E: report terminal child state
     H->>E: optionally schedule final cleanup
     H-->>C: complete
@@ -1201,16 +1210,14 @@ queue-removal primitive.
 `waitFor` is a shared handler so it can remain suspended without blocking the
 object's exclusive event handlers. It:
 
-1. validates the object, the condition, and any public event against the
-   machine's event schema;
+1. validates `done` or a context-relative RFC 6901 path;
 2. creates a Restate awakeable;
-3. calls the exclusive `subscribe` handler to evaluate or store it;
-4. optionally routes the parsed request event through `deliverEvent`; and
-5. awaits the result, optionally with a timeout.
+3. calls the exclusive `subscribe` handler to evaluate or store it; and
+4. awaits the result, optionally with a timeout.
 
-`subscribe` first checks the current snapshot. It immediately resolves a
-satisfied condition or rejects one that can no longer succeed. Otherwise it
-stores the awakeable ID under the condition.
+`subscribe` first checks the current snapshot. It immediately resolves a done
+machine or an existing context marker, and rejects a condition that can no
+longer be met. Otherwise it stores the awakeable ID under the condition.
 
 Every committed step calls `settleSubscriptions`. It evaluates each distinct
 condition once, settles all awakeables registered for a decided condition, and
@@ -1220,11 +1227,9 @@ An awakeable rejection arrives as a Restate error with code 500. `waitFor`
 translates that specific case to terminal status 412 so callers can distinguish
 a condition that became impossible from a transient service failure.
 
-The current timeout path does not unregister its awakeable ID from the
-subscription map. A later decided snapshot removes the condition and attempts
-to settle every registered ID; reset also clears the map. This is an area to
-revisit if applications create many timeouts against conditions that can remain
-pending forever.
+On timeout, the shared handler calls an ingress-private exclusive `unsubscribe`
+handler before returning the timeout. Reset and disposal reject every waiter
+from the old machine incarnation before clearing its state.
 
 ## Replay and determinism
 
@@ -1271,7 +1276,7 @@ For an XState upgrade:
 | [`src/xstate/scope.ts`](src/xstate/scope.ts)           | Inert and parent-aware XState execution scope                                |
 | [`src/xstate/snapshot.ts`](src/xstate/snapshot.ts)     | Snapshot serialization, history rehydration, public projection               |
 | [`src/xstate/registry.ts`](src/xstate/registry.ts)     | Reachable child-machine discovery and ID validation                          |
-| [`src/xstate/conditions.ts`](src/xstate/conditions.ts) | Pure waiter-condition validation and evaluation                              |
+| [`src/xstate/conditions.ts`](src/xstate/conditions.ts) | Pure wait-path validation and existence evaluation                           |
 | [`src/xstate/actors.ts`](src/xstate/actors.ts)         | Actor-source resolution and error/event helpers (pure)                       |
 | [`src/restate/schemas.ts`](src/restate/schemas.ts)     | Derives ingress serdes (input + discriminated events) from `machine.schemas` |
 | [`src/restate/contracts.ts`](src/restate/contracts.ts) | Pure Standard Schema parsing and public-event classification                 |
@@ -1286,7 +1291,7 @@ For an XState upgrade:
 
 The repository uses four confidence layers:
 
-1. **Pure behavior tests** cover snapshots, conditions, registry discovery,
+1. **Pure behavior tests** cover snapshots, wait conditions, registry discovery,
    action translation, routing, and exact `Step`/`Effect` values.
 2. **Adapter unit tests** use narrow fake contexts to cover state-independent
    Restate dispatch, cancellation tokens, child maps, actor errors, and terminal
@@ -1340,26 +1345,24 @@ High-value invariants to preserve include:
 | `MachineObjectOptions` | Type     | Restate object options plus `finalStateTTL`                                 |
 | `StandardSchema`       | Type     | Library-neutral runtime-schema interface (the shape `schemas` entries take) |
 | `MachineVirtualObject` | Type     | Typed handler surface for SDK clients                                       |
-| `WaitForRequest`       | Type     | Condition, optional timeout, and optional typed event                       |
-| `SubscribeRequest`     | Type     | Condition plus an existing awakeable ID                                     |
+| `WaitForRequest`       | Type     | `done`/RFC 6901 path condition and optional timeout                         |
+| `Condition`            | Type     | `done` or a context-relative path beginning with `/`                        |
 | `StoredState`          | Type     | Internal serializable snapshot representation                               |
 | `ReturnedSnapshot`     | Type     | Public serializable snapshot projection                                     |
-| `Condition`            | Type     | `done` or `hasTag:<tag>`                                                    |
 
 ## Public handlers
 
-| Handler     | Request             | Result             | Notes                                             |
-| ----------- | ------------------- | ------------------ | ------------------------------------------------- |
-| `create`    | `InputFrom<M>`      | `void`             | Creates or resets the root instance               |
-| `send`      | `EventFrom<M>`      | `void`             | Commits one settled macrostep                     |
-| `snapshot`  | `{}`                | `ReturnedSnapshot` | Requires an existing, non-disposed instance       |
-| `waitFor`   | `WaitForRequest<M>` | `ReturnedSnapshot` | Shared long-poll; event is sent after subscribing |
-| `subscribe` | `SubscribeRequest`  | `void`             | Low-level awakeable registration                  |
+| Handler    | Request          | Result             | Notes                                                |
+| ---------- | ---------------- | ------------------ | ---------------------------------------------------- |
+| `create`   | `InputFrom<M>`   | `void`             | Creates or resets the root instance                  |
+| `send`     | `EventFrom<M>`   | `void`             | Commits one settled macrostep                        |
+| `snapshot` | `{}`             | `ReturnedSnapshot` | Requires an existing, non-disposed instance          |
+| `waitFor`  | `WaitForRequest` | `ReturnedSnapshot` | Shared long-poll for completion or context existence |
 
 The object also contains ingress-private handlers named `deliverEvent`,
 `actorDone`, `actorError`, `executeActor`, `deliverScheduled`, `initChild`,
-`cleanupState`, and `cleanupFinalState`. `deliverEvent` carries internally routed
-domain events;
+`subscribe`, `unsubscribe`, `cleanupState`, and `cleanupFinalState`.
+`deliverEvent` carries internally routed domain events;
 `actorDone` and `actorError` are the finite actor lifecycle protocols. They are
 implementation details and should not be called by application clients.
 
@@ -1384,13 +1387,13 @@ All KV access is centralized in [`src/restate/state.ts`](src/restate/state.ts).
 
 # Appendix C: Error reference
 
-| Status/code | Meaning                                                | Typical fix                                                           |
-| ----------- | ------------------------------------------------------ | --------------------------------------------------------------------- |
-| 400         | Invalid input, event, or wait condition                | Fix the payload; use `done` or `hasTag:<tag>`                         |
-| 404         | No machine at this object key                          | Call `create` before `send`, `snapshot`, or `waitFor`                 |
-| 410         | Instance was disposed                                  | Use a new key or explicitly call `create` to start fresh              |
-| 412         | Wait condition became impossible                       | Handle completed/error outcome instead of retrying the same condition |
-| 500         | Unknown persisted child machine ID or internal failure | Check unique stable machine IDs and deployment compatibility          |
+| Status/code | Meaning                                                | Typical fix                                                      |
+| ----------- | ------------------------------------------------------ | ---------------------------------------------------------------- |
+| 400         | Invalid input, event, or wait condition                | Use `done` or a valid RFC 6901 path beginning with `/`           |
+| 404         | No machine at this object key                          | Call `create` before `send`, `snapshot`, or `waitFor`            |
+| 410         | Instance was disposed                                  | Use a new key or explicitly call `create` to start fresh         |
+| 412         | Wait condition became impossible                       | Handle completed/error outcome instead of retrying the condition |
+| 500         | Unknown persisted child machine ID or internal failure | Check unique stable machine IDs and deployment compatibility     |
 
 Configuration errors such as a negative, infinite, or `NaN`
 `finalStateTTL` throw synchronously while creating the object definition.
