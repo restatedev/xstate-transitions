@@ -41,6 +41,7 @@ interface MutableActorSystem {
 
 interface MutableActor {
   _parent: unknown;
+  _snapshot: AnyMachineSnapshot | undefined;
   system: MutableActorSystem;
 }
 
@@ -98,23 +99,33 @@ const FAKE_PARENT = {
  * A minimal stand-in for a child actor ref. `resolveState` drops live children,
  * so before transitioning we re-inject one of these per persisted child so that
  * `sendTo`/`forwardTo` targeting the child resolves to a routable action instead
- * of a communication error. Only its `id` is used (for routing); it is never run.
+ * of a communication error. Alpha.48 also reads its active status and `ref`
+ * identity during child ownership checks. `toJSON` preserves XState's actor-ref
+ * marker when Restate persists the planned snapshot. The stub itself is never
+ * run.
  */
 export function stubChildRef(id: string): unknown {
-  return {
+  const ref = {
     id,
     sessionId: id,
     send: () => {},
     _send: () => {},
-    getSnapshot: () => undefined,
+    getSnapshot: () => ({ status: "active" }),
     on: () => ({ unsubscribe: () => {} }),
     _parent: undefined,
     _processingStatus: 1,
+    toJSON: () => ({ xstate$type: "actorRef", id }),
+    ref: undefined as unknown,
   };
+  ref.ref = ref;
+  return ref;
 }
 
 /** Build an inert scope whose actor has a fake parent. */
-function parentScope(machine: AnyStateMachine): ActorScope {
+function parentScope(
+  machine: AnyStateMachine,
+  snapshot?: AnyMachineSnapshot,
+): ActorScope {
   const self = createActor(machine) as unknown as MutableActor;
   self._parent = FAKE_PARENT;
   // createActor eagerly computes an initial snapshot. Actors with a systemId
@@ -128,6 +139,10 @@ function parentScope(machine: AnyStateMachine): ActorScope {
       self.system._unregister?.(actor);
     }
   }
+  // Alpha.48 consults `self._snapshot` for child ownership and id allocation.
+  // Drop createActor's eagerly computed initial snapshot for an initial step,
+  // or replace it with the rehydrated snapshot for a resumed child step.
+  self._snapshot = snapshot;
   self.system._sendInspectionEvent = () => {};
   return {
     self,
@@ -174,5 +189,9 @@ export function runTransition(
       Action[],
     ];
   }
-  return internalsOf(machine).transition(snapshot, event, parentScope(machine));
+  return internalsOf(machine).transition(
+    snapshot,
+    event,
+    parentScope(machine, snapshot),
+  );
 }

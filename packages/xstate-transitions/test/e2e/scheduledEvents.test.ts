@@ -73,8 +73,9 @@ const machineFactory = (executor: () => Promise<void>) => {
       },
       pending: {
         on: {
-          CANCEL: (_, enq) => {
+          CANCEL: ({ context }, enq) => {
             enq.cancel("startDelay");
+            enq.stop(context.taskRef as never);
             return { target: "ready" };
           },
         },
