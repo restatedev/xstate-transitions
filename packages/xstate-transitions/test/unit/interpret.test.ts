@@ -508,6 +508,56 @@ describe("resumeStep() — events and routing", () => {
     ]);
   });
 
+  it("stops a spawned child before reusing its id on state reentry", () => {
+    const child = createMachine({ id: "child" });
+    const parent = setup({ actors: { child } }).createMachine({
+      id: "parent",
+      context: { ref: undefined as unknown },
+      initial: "ready",
+      states: {
+        ready: {
+          entry: (_, enq) => ({
+            context: { ref: enq.spawn(child, { id: "kid" }) },
+          }),
+          on: { LEAVE: { target: "pending" } },
+        },
+        pending: {
+          on: {
+            RESET: ({ context }, enq) => {
+              enq.stop(context.ref as never);
+              return { target: "ready" };
+            },
+          },
+        },
+      },
+    });
+    const created = initialStep(parent, { isChild: false });
+    const pending = resumeStep(parent, {
+      stored: created.nextState,
+      event: { type: "LEAVE" },
+      isChild: false,
+      knownChildIds: ["kid"],
+      knownPromiseIds: [],
+    });
+    const reentered = resumeStep(parent, {
+      stored: JSON.parse(JSON.stringify(pending.nextState)) as StoredState,
+      event: { type: "RESET" },
+      isChild: false,
+      knownChildIds: ["kid"],
+      knownPromiseIds: [],
+    });
+
+    expect(reentered.effects.slice(0, 2)).toEqual([
+      { kind: "stopChild", childId: "kid" },
+      {
+        kind: "startChild",
+        childId: "kid",
+        machineId: "child",
+        input: undefined,
+      },
+    ]);
+  });
+
   it("stops then restarts a re-entered promise with the same actor id", () => {
     const parent = setup({
       actors: { work: createAsyncLogic({ run: async () => "done" }) },
@@ -566,10 +616,11 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(result.effects, "scheduleSend")).toEqual([]);
   });
 
-  it("stops a child explicitly stopped via a context-held ref after rehydration", () => {
+  it("stops a child from a serialized context ref", () => {
     // Restate journals the step as JSON, turning the live actor into XState's
-    // `{ "xstate$$type": 1, id }` marker. It must be canonicalized to the
-    // injected child stub before XState applies its ownership check.
+    // current `{ "xstate$type": "actorRef", id, ... }` marker. It must be
+    // canonicalized to the injected child stub before XState applies its
+    // ownership check.
     const child = createMachine({
       id: "child",
       initial: "a",
@@ -604,6 +655,10 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(stopped.effects, "stopChild")).toEqual([
       { kind: "stopChild", childId: "kid" },
     ]);
+    expect(JSON.parse(JSON.stringify(stopped.nextState)).context.ref).toEqual({
+      xstate$type: "actorRef",
+      id: "kid",
+    });
   });
 });
 

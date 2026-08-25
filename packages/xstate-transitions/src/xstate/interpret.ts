@@ -141,14 +141,14 @@ interface MutableSnapshot {
 
 // resolveState drops live children; re-inject stub refs for known children so
 // sendTo/forwardTo targeting them resolve to routable actions. Actor refs stored
-// in context serialize to `{ "xstate$$type": 1, id }`; replace those markers
-// with the exact same stubs so XState's child ownership checks also succeed.
+// in context use XState's serialized actor marker; replace those markers with
+// the exact same stubs so XState's child ownership checks also succeed.
 function injectStubChildren(
   snapshot: AnyMachineSnapshot,
   knownChildIds: readonly string[],
 ): void {
   const mutable = snapshot as unknown as MutableSnapshot;
-  // XState alpha.40 freezes the empty `children` record produced by
+  // XState alpha.48 freezes the empty `children` record produced by
   // `resolveState`. Replace it with a mutable copy before restoring stubs.
   const children = { ...mutable.children };
   const refs = new Map<string, unknown>();
@@ -164,7 +164,9 @@ function injectStubChildren(
 function actorRefId(value: object): string | undefined {
   const candidate = value as Record<string, unknown>;
   if (typeof candidate.id !== "string") return undefined;
-  if (candidate["xstate$$type"] === 1) return candidate.id;
+  if (candidate["xstate$type"] === "actorRef") {
+    return candidate.id;
+  }
   if (candidate.ref === value && typeof candidate.send === "function") {
     return candidate.id;
   }

@@ -6,7 +6,7 @@ implementation, durability model, and testing strategy.
 
 > [!IMPORTANT]
 > The integration depends on XState internals and targets XState v6
-> `6.0.0-alpha.40`. Treat an XState upgrade as an integration change that
+> `6.0.0-alpha.48`. Treat an XState upgrade as an integration change that
 > requires the full normal and forced-replay test suites.
 
 ## Contents
@@ -1253,7 +1253,7 @@ fresh execution, test probes, migrations, and version upgrades.
 The parent-aware inert XState scope and action decoding currently depend on
 XState internal shapes. In particular, the integration recognizes XState's
 internal action type strings and fabricates inert actor references for routing.
-That is why XState is pinned to `6.0.0-alpha.40` and each new prerelease is
+That is why XState is pinned to `6.0.0-alpha.48` and each new prerelease is
 validated before the lockfile advances.
 
 For an XState upgrade:
