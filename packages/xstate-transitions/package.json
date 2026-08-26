@@ -1,6 +1,6 @@
 {
   "name": "@restatedev/xstate",
-  "version": "0.6.0-alpha.1",
+  "version": "0.6.0-alpha.2",
   "type": "module",
   "description": "Run XState v6 pure-transition machines as durable Restate virtual objects",
   "license": "MIT",
