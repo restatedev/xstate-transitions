@@ -10,6 +10,7 @@
  */
 
 import type {
+  AnyEventObject,
   AnyMachineSnapshot,
   AnyStateMachine,
   SnapshotFrom,
@@ -90,13 +91,28 @@ function deserializeTimerTarget(target: Target): LiveTimer["target"] {
   }
 }
 
+/**
+ * An invoke timeout event names the child's incarnation (`sessionId`), and
+ * XState only takes `onTimeout` when it matches the live child. That id is
+ * random and does not survive rehydration (children come back as stubs), so,
+ * like XState's own persistence, drop it: the timer is already cancelled when
+ * its invoke ends, so the actor id alone identifies it.
+ */
+function persistableTimerEvent(event: AnyEventObject): AnyEventObject {
+  if (event.type !== "xstate.timeout.actor" || !("sessionId" in event)) {
+    return event;
+  }
+  const { sessionId: _sessionId, ...rest } = event;
+  return rest as AnyEventObject;
+}
+
 function serializeTimers(timers: readonly LiveTimer[] | undefined) {
   return (timers ?? []).map((timer): StoredTimer => ({
     ...(timer.id === undefined ? {} : { id: timer.id }),
     ...(timer.seq === undefined ? {} : { seq: timer.seq }),
     delay: timer.delay,
     type: timer.type,
-    event: timer.event,
+    event: persistableTimerEvent(timer.event),
     target: serializeTimerTarget(timer.target),
   }));
 }

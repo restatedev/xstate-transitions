@@ -431,6 +431,89 @@ describe("resumeStep() — events and routing", () => {
     expect(second.nextState.timers).toHaveLength(2);
   });
 
+  it("takes an invoke's onTimeout when its timer fires after rehydration", () => {
+    const machine = setup({
+      actors: { work: createAsyncLogic({ run: async () => 1 }) },
+    }).createMachine({
+      id: "invoke-timeout",
+      initial: "run",
+      states: {
+        run: {
+          invoke: {
+            src: "work",
+            id: "w",
+            timeout: 100,
+            onTimeout: { target: "late" },
+          },
+        },
+        late: {},
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const [scheduled] = byKind(created.effects, "scheduleSend") as Extract<
+      Effect,
+      { kind: "scheduleSend" }
+    >[];
+    const fired = resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(created.nextState)) as StoredState,
+      event: scheduled!.event,
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: ["w"],
+    });
+    expect(fired.nextState.value).toBe("late");
+    expect(byKind(fired.effects, "stopPromise")).toEqual([
+      { kind: "stopPromise", actorId: "w" },
+    ]);
+  });
+
+  it("fires a delayed sendTo(self) as a send to self", () => {
+    // Like a live actor's mailbox, the event is delivered as a new external
+    // event rather than processed within the timer's macrostep.
+    const machine = createMachine({
+      id: "self-timer",
+      entry: ({ self }, enq) => {
+        enq.sendTo(self, { type: "PING" }, { delay: 10 });
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const [scheduled] = byKind(created.effects, "scheduleSend") as Extract<
+      Effect,
+      { kind: "scheduleSend" }
+    >[];
+    const fired = resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(created.nextState)) as StoredState,
+      event: scheduled!.event,
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(fired.effects).toEqual([
+      { kind: "send", target: { type: "self" }, event: { type: "PING" } },
+    ]);
+  });
+
+  it("fires a child's delayed sendTo(parent) to the parent", () => {
+    const machine = createMachine({
+      id: "kid",
+      entry: ({ parent }, enq) => {
+        enq.sendTo(parent, { type: "HI" }, { delay: 10, id: "p" });
+      },
+    });
+    const created = initialStep(machine, { isChild: true });
+    expect(created.nextState.timers?.[0]?.target).toEqual({ type: "parent" });
+    const fired = resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(created.nextState)) as StoredState,
+      event: timerEvent({ id: "p" }),
+      isChild: true,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(fired.effects).toEqual([
+      { kind: "send", target: { type: "parent" }, event: { type: "HI" } },
+    ]);
+  });
+
   it("schedules an `after` timer by its event and cancels it on exit", () => {
     const delayed = createMachine({
       id: "after",
