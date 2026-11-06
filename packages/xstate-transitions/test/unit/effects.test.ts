@@ -242,7 +242,6 @@ describe("executeEffects", () => {
       {
         kind: "scheduleSend",
         sendId: "reminder",
-        target: { type: "self" },
         event: { type: "REMIND" },
         delay: 100,
       },
@@ -259,14 +258,12 @@ describe("executeEffects", () => {
       {
         kind: "scheduleSend",
         sendId: "slot",
-        target: { type: "self" },
         event: { type: "OLD" },
         delay: 100,
       },
       {
         kind: "scheduleSend",
         sendId: "slot",
-        target: { type: "self" },
         event: { type: "NEW" },
         delay: 50,
       },
@@ -275,7 +272,6 @@ describe("executeEffects", () => {
     expect(harness.state.get("scheduled")).toEqual({
       slot: {
         uuid: "uuid-2",
-        targetKey: "parent-key",
         event: { type: "NEW" },
       },
     });
@@ -298,7 +294,6 @@ describe("executeEffects", () => {
     harness.state.set("scheduled", {
       slot: {
         uuid: "old-token",
-        targetKey: "parent-key",
         event: { type: "OLD" },
       },
     });
@@ -308,7 +303,6 @@ describe("executeEffects", () => {
       {
         kind: "scheduleSend",
         sendId: "slot",
-        target: { type: "self" },
         event: { type: "NEW" },
         delay: 50,
       },
@@ -317,7 +311,6 @@ describe("executeEffects", () => {
     expect(harness.state.get("scheduled")).toEqual({
       slot: {
         uuid: "uuid-1",
-        targetKey: "parent-key",
         event: { type: "NEW" },
       },
     });

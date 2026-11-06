@@ -143,15 +143,9 @@ export async function executeEffects(
         break;
       }
       case "scheduleSend": {
-        const key = resolveTarget(handler, effect.target, children);
-        if (key === undefined) break;
         const uuid = ctx.rand.uuidv4();
         const { sendId } = effect;
-        scheduled[sendId] = {
-          uuid,
-          targetKey: key,
-          event: effect.event,
-        };
+        scheduled[sendId] = { uuid, event: effect.event };
         scheduledChanged = true;
         const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
           self,

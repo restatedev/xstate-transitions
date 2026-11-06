@@ -114,7 +114,6 @@ export type Effect =
        */
       kind: "scheduleSend";
       sendId: string;
-      target: Target;
       event: AnyEventObject;
       delay: number;
     }

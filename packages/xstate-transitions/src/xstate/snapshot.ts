@@ -107,7 +107,9 @@ function persistableTimerEvent(event: AnyEventObject): AnyEventObject {
   return rest as AnyEventObject;
 }
 
-function serializeTimers(timers: readonly LiveTimer[] | undefined) {
+function serializeTimers(
+  timers: readonly LiveTimer[] | undefined,
+): StoredTimer[] {
   return (timers ?? []).map((timer): StoredTimer => ({
     ...(timer.id === undefined ? {} : { id: timer.id }),
     ...(timer.seq === undefined ? {} : { seq: timer.seq }),
@@ -152,7 +154,7 @@ export function fromStored<M extends AnyStateMachine>(
   // rest of what XState carries between transitions: pending timers and their
   // sequence, the inputs active states were entered with, and the counters
   // that keep generated child ids from being reused.
-  const raw = snapshot as unknown as RawSnapshot;
+  const raw = asRaw(snapshot);
   raw.timers = (stored.timers ?? []).map((timer) => ({
     ...timer,
     target: deserializeTimerTarget(timer.target),

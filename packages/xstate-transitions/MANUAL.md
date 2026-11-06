@@ -1006,7 +1006,6 @@ type Effect =
   | {
       kind: "scheduleSend";
       sendId: string;
-      target: Target;
       event: AnyEventObject;
       delay: number;
     }
@@ -1236,7 +1235,7 @@ A delayed send cannot be physically withdrawn from Restate's queue. The
 integration therefore uses logical cancellation:
 
 ```text
-scheduled[sendId] = { uuid, targetKey, event }
+scheduled[sendId] = { uuid, event }
 ```
 
 Every delayed effect (`after`, state/actor timeouts, delayed `raise` and
@@ -1244,7 +1243,8 @@ Every delayed effect (`after`, state/actor timeouts, delayed `raise` and
 explicit ID, else the sequence number XState assigns to an unnamed delay, else
 its built-in timer event (such as `xstate.after` with its `stateId` and
 `delay`). The `sendId` is that key in string form, and the scheduled event is an
-`xstate.timer` event carrying the key, always addressed to the instance itself.
+`xstate.timer` event carrying the key, which is always delivered back to the
+instance that scheduled it.
 
 It schedules an internal `deliverScheduled({ sendId, uuid })` call. On delivery,
 the handler reloads the record and proceeds only if both IDs still match. It

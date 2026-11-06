@@ -303,7 +303,6 @@ describe("resumeStep() — events and routing", () => {
     expect(scheduled[0]).toEqual({
       kind: "scheduleSend",
       sendId: timerId({ id: "d" }),
-      target: { type: "self" },
       event: timerEvent({ id: "d" }),
       delay: 100,
     });
@@ -366,7 +365,6 @@ describe("resumeStep() — events and routing", () => {
       {
         kind: "scheduleSend",
         sendId: timerId({ id: "zero" }),
-        target: { type: "self" },
         event: timerEvent({ id: "zero" }),
         delay: 0,
       },
@@ -391,7 +389,6 @@ describe("resumeStep() — events and routing", () => {
       {
         kind: "scheduleSend",
         sendId: timerId({ id: "self-delay" }),
-        target: { type: "self" },
         event: timerEvent({ id: "self-delay" }),
         delay: 10,
       },
@@ -535,7 +532,6 @@ describe("resumeStep() — events and routing", () => {
       {
         kind: "scheduleSend",
         sendId: timerId(key),
-        target: { type: "self" },
         event: timerEvent(key),
         delay: 1000,
       },
@@ -620,7 +616,6 @@ describe("resumeStep() — events and routing", () => {
       {
         kind: "scheduleSend",
         sendId: timerId({ id: "s" }),
-        target: { type: "self" },
         event: timerEvent({ id: "s" }),
         delay: 50,
       },

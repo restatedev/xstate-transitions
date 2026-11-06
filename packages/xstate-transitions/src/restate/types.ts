@@ -102,7 +102,6 @@ export interface CleanupFinalStateRequest {
 /** Persisted record of a pending delayed delivery, keyed by sendId. */
 export interface ScheduledDelivery {
   readonly uuid: string;
-  readonly targetKey: string;
   readonly event: AnyEventObject;
 }
 

@@ -64,7 +64,7 @@ export interface ActorScope {
   emit: () => void;
 }
 
-/** The internals of a machine we drive directly with a parent-aware scope. */
+/** The internals of a machine we drive directly with our own scope. */
 interface MachineInternals {
   initialTransition: (
     input: unknown,
@@ -80,14 +80,14 @@ interface MachineInternals {
 const internalsOf = (machine: AnyStateMachine): MachineInternals =>
   machine as unknown as MachineInternals;
 
-// The pure transition() API builds an inert scope with no parent, so a child's
-// `sendTo(parent, …)` (v6's replacement for `sendParent`) would push a
-// communication-error event instead of a routable action. Giving the throwaway
-// actor a fake `_parent` makes XState resolve those into ordinary
-// `@xstate.sendTo` actions whose `target.id` is #_parent, which the integration
-// routes to the parent object. It is also the restored target of a pending
-// timer that sends to the parent. Its `address` roots the addresses XState
-// gives a child instance and its own children (see `instanceAddress`).
+// An inert scope has no parent, so a child's `sendTo(parent, …)` (v6's
+// replacement for `sendParent`) would push a communication-error event instead
+// of a routable action. Giving a child instance's throwaway actor a fake
+// `_parent` makes XState resolve those into ordinary `@xstate.sendTo` actions
+// whose `target.id` is #_parent, which the integration routes to the parent
+// object. It is also the restored target of a pending timer that sends to the
+// parent. Its `address` roots the addresses XState gives a child instance and
+// that instance's own children.
 const FAKE_PARENT = {
   id: PARENT_ID,
   address: PARENT_ID,
@@ -178,53 +178,6 @@ export function stubChildRef(
 }
 
 /**
- * The inert actor scope an instance transitions in. Building it ourselves
- * (rather than letting xstate's `transition()` build one internally) gives the
- * integration the scope's `self` before the transition runs: its `address`
- * anchors persisted actor refs, and it is the parent of re-injected child
- * stubs. A child instance's actor gets a fake parent so `sendTo(parent, …)`
- * resolves to a routable action.
- */
-export function createTransitionScope(
-  machine: AnyStateMachine,
-  isChild: boolean,
-  snapshot?: AnyMachineSnapshot,
-): ActorScope {
-  // `createActor` eagerly computes an initial snapshot, so the bound must be in
-  // place before it runs.
-  guardInfiniteLoops(machine);
-  const self = createActor(machine) as unknown as MutableActor;
-  if (isChild) self._parent = FAKE_PARENT;
-  // createActor eagerly computes an initial snapshot. Actors with a systemId
-  // are registered during that construction, then registered again when we
-  // explicitly call initialTransition/transition below. XState's own inert
-  // scope replaces the system for the same reason; removing the eager entries
-  // gives this parent-aware scope equivalent isolation.
-  const all = self.system.getAll?.();
-  if (all) {
-    for (const actor of Object.values(all)) {
-      self.system._unregister?.(actor);
-    }
-  }
-  // XState consults `self._snapshot` for child ownership and id allocation.
-  // Drop createActor's eagerly computed initial snapshot for an initial step,
-  // or replace it with the rehydrated snapshot for a resumed step.
-  self._snapshot = snapshot;
-  self.system._sendInspectionEvent = () => {};
-  return {
-    self,
-    system: self.system,
-    actionExecutor: () => {},
-    defer: () => {},
-    id: "",
-    logger: () => {},
-    sessionId: "",
-    stopChild: () => {},
-    emit: () => {},
-  };
-}
-
-/**
  * The microstep bound applied to machines that do not set their own
  * `options.maxIterations`. XState v6 leaves macrosteps unbounded by default, so
  * a cycle of eventless transitions or raised events would spin until the
@@ -255,15 +208,49 @@ function guardInfiniteLoops(machine: AnyStateMachine): void {
 }
 
 /**
- * The actor address an instance transitions under: the machine id for a root,
- * and the machine id under the fake parent for a child. Serialized actor refs
- * (`{ $actor: address }`) are compared against it.
+ * The inert actor scope an instance transitions in. Building it ourselves
+ * (rather than letting xstate's `transition()` build one internally) gives the
+ * integration the scope's `self` before the transition runs: its `address`
+ * anchors persisted actor refs, and it is the parent of re-injected child
+ * stubs. A child instance's actor gets a fake parent so `sendTo(parent, …)`
+ * resolves to a routable action.
  */
-export function instanceAddress(
+export function createTransitionScope(
   machine: AnyStateMachine,
   isChild: boolean,
-): string {
-  return createTransitionScope(machine, isChild).self.address;
+  snapshot?: AnyMachineSnapshot,
+): ActorScope {
+  // `createActor` eagerly computes an initial snapshot, so the loop bound must
+  // be in place before it runs.
+  guardInfiniteLoops(machine);
+  const self = createActor(machine) as unknown as MutableActor;
+  if (isChild) self._parent = FAKE_PARENT;
+  // Actors with a systemId are registered during that eager computation, then
+  // registered again when the transition runs in this scope. XState's own
+  // inert scope replaces the system for the same reason; removing the eager
+  // entries gives this scope equivalent isolation.
+  const all = self.system.getAll?.();
+  if (all) {
+    for (const actor of Object.values(all)) {
+      self.system._unregister?.(actor);
+    }
+  }
+  // XState consults `self._snapshot` for child ownership and id allocation.
+  // Drop createActor's eagerly computed initial snapshot for an initial step,
+  // or replace it with the rehydrated snapshot for a resumed step.
+  self._snapshot = snapshot;
+  self.system._sendInspectionEvent = () => {};
+  return {
+    self,
+    system: self.system,
+    actionExecutor: () => {},
+    defer: () => {},
+    id: "",
+    logger: () => {},
+    sessionId: "",
+    stopChild: () => {},
+    emit: () => {},
+  };
 }
 
 /** Compute the initial transition in `scope`. */

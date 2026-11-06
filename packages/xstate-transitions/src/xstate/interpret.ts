@@ -214,12 +214,14 @@ function terminatedChild(
 ): { id: string; status: StubStatus } | undefined {
   const actorId = (event as { actorId?: unknown }).actorId;
   if (typeof actorId !== "string") return undefined;
-  if (event.type === "xstate.done.actor")
-    return { id: actorId, status: "done" };
-  if (event.type === "xstate.error.actor") {
-    return { id: actorId, status: "error" };
+  switch (event.type) {
+    case "xstate.done.actor":
+      return { id: actorId, status: "done" };
+    case "xstate.error.actor":
+      return { id: actorId, status: "error" };
+    default:
+      return undefined;
   }
-  return undefined;
 }
 
 /**
@@ -283,6 +285,10 @@ function canonicalizeActorRefs(
   return changed ? result : value;
 }
 
+/**
+ * Translate XState's effects for one step into durable {@link Effect}s, given
+ * the child and promise actors that were active before the step.
+ */
 function interpretActions(
   machine: AnyStateMachine,
   selfAddress: string,
@@ -315,12 +321,11 @@ function interpretActions(
       // Start only the incarnation XState kept: a spawn stopped later in the
       // same step, or superseded by a later spawn of the same id, never ran.
       if (settled[action.id] !== action.actor) continue;
-      effects.push(startEffect(machine, action));
-      if (effects.at(-1)?.kind === "startChild") {
-        activeChildren.add(action.id);
-      } else {
-        activePromises.add(action.id);
-      }
+      const start = startEffect(machine, action);
+      effects.push(start);
+      const active =
+        start.kind === "startChild" ? activeChildren : activePromises;
+      active.add(action.id);
       continue;
     }
     if (isBuiltInExecutableEffect(action) && action.type === "@xstate.stop") {
@@ -396,6 +401,13 @@ const XSTATE_TIMER = "xstate.timer";
 type TimerKey =
   { id: string } | { seq: number } | { event: Record<string, unknown> };
 
+/** The fields of a delayed raise/sendTo or a cancel that identify a timer. */
+interface TimerFields {
+  id?: string | undefined;
+  seq?: number | undefined;
+  event?: unknown;
+}
+
 /** The identifying fields of a built-in timer event (mirrors XState). */
 function builtInTimerIdentity(
   event: Record<string, unknown> | undefined,
@@ -418,11 +430,7 @@ function builtInTimerIdentity(
  * assigns to an unnamed delayed send, else the identity of a built-in timer
  * event (`after`, timeouts).
  */
-function timerKeyOf(fields: {
-  id?: string | undefined;
-  seq?: number | undefined;
-  event?: unknown;
-}): TimerKey | undefined {
+function timerKeyOf(fields: TimerFields): TimerKey | undefined {
   if (fields.id !== undefined) return { id: fields.id };
   if (fields.seq !== undefined) return { seq: fields.seq };
   const event = fields.event as Record<string, unknown> | undefined;
@@ -438,10 +446,7 @@ function timerSendId(key: TimerKey): string {
 }
 
 /** Schedule the `xstate.timer` delivery that fires a pending XState timer. */
-function scheduleTimer(
-  action: Parameters<typeof timerKeyOf>[0],
-  delay: number,
-): Effect {
+function scheduleTimer(action: TimerFields, delay: number): Effect {
   const key = timerKeyOf(action);
   if (key === undefined) {
     throw new Error("XState emitted a delayed effect without a timer key.");
@@ -449,7 +454,6 @@ function scheduleTimer(
   return {
     kind: "scheduleSend",
     sendId: timerSendId(key),
-    target: { type: "self" },
     event: { type: XSTATE_TIMER, ...key },
     delay,
   };
@@ -516,22 +520,20 @@ function targetOf(
   // active children exactly.
   if (typeof (target as { $actor?: unknown }).$actor === "string") {
     const address = actorRefAddress(target);
+    if (address === undefined) return undefined;
     if (address === selfAddress) return { type: "self" };
-    for (const childId of activeChildren) {
-      if (address === childAddress(selfAddress, childId)) {
-        return { type: "child", childId };
-      }
-    }
-    return undefined;
+    const childId = childIdAt(selfAddress, address);
+    return childId !== undefined && activeChildren.has(childId)
+      ? { type: "child", childId }
+      : undefined;
   }
   // A live ref comes from this instance's own transition: its parent, one of
   // its children, or itself.
-  const ref = target as ActorLike;
-  const id = ref.id;
+  const { id, logic } = target as ActorLike;
   if (id === PARENT_ID) return { type: "parent" };
   if (id !== undefined && activeChildren.has(id)) {
     return { type: "child", childId: id };
   }
-  if (ref?.logic === machine) return { type: "self" };
+  if (logic === machine) return { type: "self" };
   return undefined;
 }

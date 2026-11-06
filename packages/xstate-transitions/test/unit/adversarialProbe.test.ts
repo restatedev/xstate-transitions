@@ -24,7 +24,6 @@ import { createNormalizedErrorActorEvent } from "../../src/xstate/actors";
 import { buildRegistry } from "../../src/xstate/registry";
 import {
   createTransitionScope,
-  instanceAddress,
   runInitial,
   runTransition,
   stubChildRef,
@@ -172,7 +171,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      child: stubChildRef("child", { address: instanceAddress(parent, false) }),
+      child: stubChildRef("child", createTransitionScope(parent, false).self),
     };
     const [, actions] = transition(parent, rehydrated, {
       type: "SEND",
@@ -235,7 +234,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      child: stubChildRef("child", { address: instanceAddress(parent, false) }),
+      child: stubChildRef("child", createTransitionScope(parent, false).self),
     };
     const [, forwardActions] = transition(parent, rehydrated, {
       type: "FORWARD",
@@ -292,9 +291,10 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      [spawn.id]: stubChildRef(spawn.id, {
-        address: instanceAddress(machine, false),
-      }),
+      [spawn.id]: stubChildRef(
+        spawn.id,
+        createTransitionScope(machine, false).self,
+      ),
     };
     const [next] = transition(machine, rehydrated, errorEvent as never);
     expect(next).toMatchObject({ status: "done", value: "matched" });

@@ -582,17 +582,7 @@ class MachineHandlers<M extends AnyStateMachine> {
 
     delete scheduled[request.sendId];
     setScheduled(context, scheduled);
-
-    if (entry.targetKey === context.key) {
-      await applyEvent(this.runtime, context, entry.event);
-      return;
-    }
-
-    const sender = context.objectSendClient<MachineInternalVirtualObject>(
-      this.runtime.self,
-      entry.targetKey,
-    );
-    sender.deliverEvent(entry.event);
+    await applyEvent(this.runtime, context, entry.event);
   }
 
   async executeActor(
@@ -677,12 +667,7 @@ async function initializeRoot<M extends AnyStateMachine>(
   const result = await computeStep(context, "create", () =>
     initialStep(runtime.rootMachine, { input, isChild: false }),
   );
-  await rejectSubscriptions(
-    context,
-    "State machine was reset before the condition was met",
-  );
-  await disposeChildren(context, runtime.self);
-  clearRuntimeState(context);
+  await resetInstance(runtime, context);
   clearIdentity(context);
 
   const handler = await loadHandlerContext(runtime, context);
@@ -708,30 +693,53 @@ async function initializeChild(
     );
   } catch (error) {
     if (!(error instanceof restate.TerminalError)) throw error;
-    // The child never started. Report it as the child's error so the parent
-    // can take `onError` instead of waiting for a completion that never comes.
-    context
-      .objectSendClient<MachineInternalVirtualObject>(
-        runtime.self,
-        request.parentKey,
-      )
-      .actorError({
-        actorId: request.invokeId,
-        executionId: request.executionId,
-        error: normalizeError(error),
-      });
+    reportFailedStart(runtime, context, request, error);
     return;
   }
+  await resetInstance(runtime, context);
+  setIdentity(context, request);
+
+  const handler = await loadHandlerContext(runtime, context);
+  await commitStep(handler, result);
+}
+
+/**
+ * Clear the per-run state shared by `create` and `initChild` before a fresh
+ * instance starts: pending waiters are rejected and owned children disposed.
+ */
+async function resetInstance(
+  runtime: MachineRuntime,
+  context: restate.ObjectContext,
+): Promise<void> {
   await rejectSubscriptions(
     context,
     "State machine was reset before the condition was met",
   );
   await disposeChildren(context, runtime.self);
   clearRuntimeState(context);
-  setIdentity(context, request);
+}
 
-  const handler = await loadHandlerContext(runtime, context);
-  await commitStep(handler, result);
+/**
+ * Report a child whose initial transition failed as that child's error, so
+ * the parent takes `onError` instead of waiting for a completion that never
+ * comes.
+ */
+function reportFailedStart(
+  runtime: MachineRuntime,
+  context: restate.ObjectContext,
+  request: InitRequest,
+  error: restate.TerminalError,
+): void {
+  context
+    .objectSendClient<MachineInternalVirtualObject>(
+      runtime.self,
+      request.parentKey,
+    )
+    .actorError({
+      actorId: request.invokeId,
+      executionId: request.executionId,
+      error: normalizeError(error),
+    });
 }
 
 /** Apply one event to an existing instance; missing internal targets are no-ops. */
@@ -839,6 +847,18 @@ function computeStep(
   });
 }
 
+/** The terminal error reported for a transition that threw. */
+function transitionFailure(
+  label: string,
+  error: unknown,
+): restate.TerminalError {
+  if (error instanceof restate.TerminalError) return error;
+  return new restate.TerminalError(
+    `State machine transition failed (${label}): ${describeError(error)}`,
+    { errorCode: 500 },
+  );
+}
+
 /**
  * Restore a persisted state outside a transition (for reads). A stored state
  * that no longer fits the machine (e.g. a state removed in a later deploy)
@@ -851,29 +871,18 @@ export function restoreSnapshot(
   try {
     return fromStored(machine, stored);
   } catch (error) {
-    const detail =
-      error instanceof Error
-        ? `${error.name}: ${error.message}`
-        : String(error);
     throw new restate.TerminalError(
-      `The stored state does not fit machine "${machine.id}": ${detail}`,
+      `The stored state does not fit machine "${machine.id}": ${describeError(error)}`,
       { errorCode: 500 },
     );
   }
 }
 
-/** The terminal error reported for a transition that threw. */
-function transitionFailure(
-  label: string,
-  error: unknown,
-): restate.TerminalError {
-  if (error instanceof restate.TerminalError) return error;
-  const detail =
-    error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return new restate.TerminalError(
-    `State machine transition failed (${label}): ${detail}`,
-    { errorCode: 500 },
-  );
+/** `Name: message` for an Error, or the stringified value. */
+function describeError(error: unknown): string {
+  return error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : String(error);
 }
 
 async function commitStep(
