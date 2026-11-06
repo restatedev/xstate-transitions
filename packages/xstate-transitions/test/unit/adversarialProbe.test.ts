@@ -23,6 +23,7 @@ import { runActor } from "../../src/restate/run-actor";
 import { createNormalizedErrorActorEvent } from "../../src/xstate/actors";
 import { buildRegistry } from "../../src/xstate/registry";
 import {
+  createTransitionScope,
   instanceAddress,
   runInitial,
   runTransition,
@@ -171,7 +172,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      child: stubChildRef("child", instanceAddress(parent, false)),
+      child: stubChildRef("child", { address: instanceAddress(parent, false) }),
     };
     const [, actions] = transition(parent, rehydrated, {
       type: "SEND",
@@ -199,14 +200,22 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
         },
       },
     });
-    const [, entryActions] = runInitial(child, undefined, true);
+    const [, entryActions] = runInitial(
+      child,
+      undefined,
+      createTransitionScope(child, true),
+    );
     expect(builtIn(entryActions, "@xstate.sendTo").target.id).toBe("#_parent");
-    const [childSnapshot] = runInitial(child, undefined, true);
+    const [childSnapshot] = runInitial(
+      child,
+      undefined,
+      createTransitionScope(child, true),
+    );
     const [, childActions] = runTransition(
       child,
       childSnapshot,
       { type: "GO" },
-      true,
+      createTransitionScope(child, true, childSnapshot),
     );
     expect(builtIn(childActions, "@xstate.sendTo").target.id).toBe("#_parent");
 
@@ -226,7 +235,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      child: stubChildRef("child", instanceAddress(parent, false)),
+      child: stubChildRef("child", { address: instanceAddress(parent, false) }),
     };
     const [, forwardActions] = transition(parent, rehydrated, {
       type: "FORWARD",
@@ -283,7 +292,9 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      [spawn.id]: stubChildRef(spawn.id, instanceAddress(machine, false)),
+      [spawn.id]: stubChildRef(spawn.id, {
+        address: instanceAddress(machine, false),
+      }),
     };
     const [next] = transition(machine, rehydrated, errorEvent as never);
     expect(next).toMatchObject({ status: "done", value: "matched" });

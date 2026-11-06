@@ -670,6 +670,11 @@ async function initializeRoot<M extends AnyStateMachine>(
   context: restate.ObjectContext,
   input: InputFrom<M>,
 ): Promise<void> {
+  // Compute first, so a failing initial transition has no side effects at all
+  // (such as rejecting the waiters of the instance it would have replaced).
+  const result = await computeStep(context, "create", () =>
+    initialStep(runtime.rootMachine, { input, isChild: false }),
+  );
   await rejectSubscriptions(
     context,
     "State machine was reset before the condition was met",
@@ -678,9 +683,6 @@ async function initializeRoot<M extends AnyStateMachine>(
   clearIdentity(context);
 
   const handler = await loadHandlerContext(runtime, context);
-  const result = await computeStep(context, "create", () =>
-    initialStep(runtime.rootMachine, { input, isChild: false }),
-  );
   await commitStep(handler, result);
 }
 
@@ -690,6 +692,15 @@ async function initializeChild(
   context: restate.ObjectContext,
   request: InitRequest,
 ): Promise<void> {
+  const machine = runtime.resolveMachine(request.machineId);
+  // Compute first, as in `create`, so a failing initial transition has no
+  // side effects.
+  const result = await computeStep(context, "initChild", () =>
+    initialStep(machine, {
+      input: request.input,
+      isChild: true,
+    }),
+  );
   await rejectSubscriptions(
     context,
     "State machine was reset before the condition was met",
@@ -697,14 +708,7 @@ async function initializeChild(
   clearRuntimeState(context);
   setIdentity(context, request);
 
-  const machine = runtime.resolveMachine(request.machineId);
   const handler = await loadHandlerContext(runtime, context);
-  const result = await computeStep(context, "initChild", () =>
-    initialStep(machine, {
-      input: request.input,
-      isChild: true,
-    }),
-  );
   await commitStep(handler, result);
 }
 
@@ -792,12 +796,39 @@ function computeEventStep(
 
 // Machine transitions may run synchronous user code such as assign actions.
 // Recording the Step keeps replay deterministic without constraining that code.
+//
+// A transition is pure, synchronous computation over persisted state, so an
+// error it throws (a throwing guard or action, an infinite eventless loop, an
+// XState rejection such as stopping an actor that is not a child) recurs on
+// every attempt. Retrying would block the object's queue forever, so the
+// failure is terminal: the invocation fails, nothing from the Step is
+// committed, and the instance stays usable for later events.
 function computeStep(
   context: restate.ObjectContext,
   label: string,
   compute: () => Step,
 ): Promise<Step> {
-  return context.run(label, compute);
+  return context.run(label, () => {
+    try {
+      return compute();
+    } catch (error) {
+      throw transitionFailure(label, error);
+    }
+  });
+}
+
+/** The terminal error reported for a transition that threw. */
+function transitionFailure(
+  label: string,
+  error: unknown,
+): restate.TerminalError {
+  if (error instanceof restate.TerminalError) return error;
+  const detail =
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return new restate.TerminalError(
+    `State machine transition failed (${label}): ${detail}`,
+    { errorCode: 500 },
+  );
 }
 
 async function commitStep(

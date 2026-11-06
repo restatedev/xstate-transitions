@@ -996,6 +996,35 @@ describe("resumeStep() — actor refs held in context", () => {
       expect(byKind(result.effects, "send")).toEqual([]);
     });
 
+    it(`treats stopping an already-stopped child again as a no-op (${scope})`, () => {
+      // As for a live actor: the stale ref still names this instance's own
+      // child, so XState accepts the stop, and there is nothing left to tear
+      // down. Throwing here would fail every retry of the event.
+      const machine = holder("owner");
+      const stopped = run(machine, isChild, [{ type: "STOP" }]);
+      expect(stopped.effects).toEqual([{ kind: "stopChild", childId: "kid" }]);
+      const again = resumeStep(machine, {
+        stored: JSON.parse(JSON.stringify(stopped.nextState)) as StoredState,
+        event: { type: "STOP" },
+        isChild,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+      expect(again.effects).toEqual([]);
+      // The stale ref keeps its address, and sends to it go nowhere.
+      expect(
+        JSON.parse(JSON.stringify(again.nextState)).context.ref.$actor,
+      ).toMatch(/\/kid$/);
+      const poke = resumeStep(machine, {
+        stored: JSON.parse(JSON.stringify(again.nextState)) as StoredState,
+        event: { type: "POKE" },
+        isChild,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+      expect(poke.effects).toEqual([]);
+    });
+
     it(`does not stop a same-named child through a foreign ref (${scope})`, () => {
       const foreign = { $actor: "elsewhere/kid" };
       let stopped: Effect[] = [];

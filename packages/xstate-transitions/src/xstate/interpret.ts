@@ -21,7 +21,8 @@ import { isMachine } from "./registry";
 import {
   PARENT_ID,
   childAddress,
-  instanceAddress,
+  childIdAt,
+  createTransitionScope,
   runInitial,
   runTransition,
   stubChildRef,
@@ -80,9 +81,9 @@ import type {
  * @returns The next persisted state, a caller-facing snapshot, and the effects.
  */
 export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
-  const [snapshot, actions] = runInitial(machine, input.input, input.isChild);
-  const self = instanceAddress(machine, input.isChild);
-  return finish(machine, self, snapshot, actions, []);
+  const scope = createTransitionScope(machine, input.isChild);
+  const [snapshot, actions] = runInitial(machine, input.input, scope);
+  return finish(machine, scope.self.address, snapshot, actions, []);
 }
 
 /**
@@ -101,20 +102,15 @@ export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
  */
 export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
   const snapshot = fromStored(machine, input.stored);
-  const self = instanceAddress(machine, input.isChild);
-  injectStubChildren(snapshot, self, [
+  const scope = createTransitionScope(machine, input.isChild, snapshot);
+  injectStubChildren(snapshot, scope.self, [
     ...input.knownChildIds,
     ...input.knownPromiseIds,
   ]);
-  const [next, actions] = runTransition(
-    machine,
-    snapshot,
-    input.event,
-    input.isChild,
-  );
+  const [next, actions] = runTransition(machine, snapshot, input.event, scope);
   return finish(
     machine,
-    self,
+    scope.self.address,
     next,
     actions,
     input.knownChildIds,
@@ -165,10 +161,12 @@ interface MutableSnapshot {
 // sendTo/forwardTo targeting them resolve to routable actions. Actor refs stored
 // in context use XState's serialized actor marker; replace the markers that
 // address one of these children with the exact same stubs so XState's child
-// ownership checks also succeed.
+// ownership checks also succeed. A marker for one of this instance's children
+// that is no longer active becomes a stopped stub, so stopping it again is the
+// same no-op it is for a live actor.
 function injectStubChildren(
   snapshot: AnyMachineSnapshot,
-  selfAddress: string,
+  self: { address: string },
   knownChildIds: readonly string[],
 ): void {
   const mutable = snapshot as unknown as MutableSnapshot;
@@ -177,11 +175,20 @@ function injectStubChildren(
   const children = { ...mutable.children };
   const byAddress = new Map<string, unknown>();
   for (const childId of knownChildIds) {
-    children[childId] ??= stubChildRef(childId, selfAddress);
-    byAddress.set(childAddress(selfAddress, childId), children[childId]);
+    children[childId] ??= stubChildRef(childId, self);
+    byAddress.set(childAddress(self.address, childId), children[childId]);
   }
   mutable.children = children;
-  mutable.context = canonicalizeActorRefs(mutable.context, byAddress);
+  const resolve = (address: string): unknown => {
+    const known = byAddress.get(address);
+    if (known !== undefined) return known;
+    const childId = childIdAt(self.address, address);
+    if (childId === undefined) return undefined;
+    const stopped = stubChildRef(childId, self, "stopped");
+    byAddress.set(address, stopped);
+    return stopped;
+  };
+  mutable.context = canonicalizeActorRefs(mutable.context, resolve);
   // Timers restored with a child target point at the same canonical stubs.
   mutable.timers = mutable.timers.map((timer) => {
     const target = timer.target as { id?: unknown } | "self";
@@ -215,22 +222,25 @@ function actorRefAddress(value: object): string | undefined {
   return undefined;
 }
 
-/** Recursively replace persisted actor refs without mutating user context. */
+/**
+ * Recursively replace persisted actor refs without mutating user context.
+ * `resolve` maps an actor address to its stand-in ref, or `undefined` to keep
+ * the ref as it is.
+ */
 function canonicalizeActorRefs(
   value: unknown,
-  byAddress: ReadonlyMap<string, unknown>,
+  resolve: (address: string) => unknown,
 ): unknown {
   if (typeof value !== "object" || value === null) return value;
 
   const address = actorRefAddress(value);
-  if (address !== undefined && byAddress.has(address)) {
-    return byAddress.get(address);
-  }
+  const replacement = address === undefined ? undefined : resolve(address);
+  if (replacement !== undefined) return replacement;
 
   if (Array.isArray(value)) {
     let changed = false;
     const result = value.map((item) => {
-      const next = canonicalizeActorRefs(item, byAddress);
+      const next = canonicalizeActorRefs(item, resolve);
       changed ||= next !== item;
       return next;
     });
@@ -243,7 +253,7 @@ function canonicalizeActorRefs(
   let changed = false;
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    const next = canonicalizeActorRefs(item, byAddress);
+    const next = canonicalizeActorRefs(item, resolve);
     changed ||= next !== item;
     result[key] = next;
   }

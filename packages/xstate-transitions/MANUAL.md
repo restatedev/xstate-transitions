@@ -599,6 +599,15 @@ A cycle of eventless transitions or raised events fails the invocation with an
 `InfiniteTransitionError` after 1000 microsteps. Set
 `createMachine({ options: { maxIterations } })` to choose a different bound.
 
+A transition that throws (a throwing guard or action, an infinite loop, or an
+XState rejection such as stopping an actor that is not a child) fails the
+invocation with a terminal error instead of being retried, because the same
+computation would fail on every retry. Nothing from that step is committed and
+the instance keeps accepting events. When the failing event was a delayed event
+or an actor result, that delivery is consumed and not redelivered. XState
+itself turns some failures, such as a throwing context factory, into an `error`
+snapshot rather than a thrown error; those are committed like any other state.
+
 To model a recurring timer, have the delivered event schedule its next delayed
 self-event. Do not use `setInterval` or a callback actor.
 
