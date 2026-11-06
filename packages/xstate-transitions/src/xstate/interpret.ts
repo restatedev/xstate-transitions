@@ -18,7 +18,14 @@ import type {
 import { isBuiltInExecutableEffect } from "xstate";
 import { referenceInlineActor, resolveReferencedActor } from "./actors";
 import { isMachine } from "./registry";
-import { PARENT_ID, runInitial, runTransition, stubChildRef } from "./scope";
+import {
+  PARENT_ID,
+  childAddress,
+  instanceAddress,
+  runInitial,
+  runTransition,
+  stubChildRef,
+} from "./scope";
 import { fromStored, toReturnedSnapshot, toStored } from "./snapshot";
 import type {
   Action,
@@ -74,7 +81,8 @@ import type {
  */
 export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
   const [snapshot, actions] = runInitial(machine, input.input, input.isChild);
-  return finish(machine, snapshot, actions, []);
+  const self = instanceAddress(machine, input.isChild);
+  return finish(machine, self, snapshot, actions, []);
 }
 
 /**
@@ -93,7 +101,8 @@ export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
  */
 export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
   const snapshot = fromStored(machine, input.stored);
-  injectStubChildren(snapshot, [
+  const self = instanceAddress(machine, input.isChild);
+  injectStubChildren(snapshot, self, [
     ...input.knownChildIds,
     ...input.knownPromiseIds,
   ]);
@@ -105,6 +114,7 @@ export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
   );
   return finish(
     machine,
+    self,
     next,
     actions,
     input.knownChildIds,
@@ -125,6 +135,7 @@ interface ActorLike {
 /** Build the shared result shape for both entrypoints. */
 function finish(
   machine: AnyStateMachine,
+  selfAddress: string,
   snapshot: AnyMachineSnapshot,
   actions: Action[],
   knownChildIds: readonly string[],
@@ -135,6 +146,7 @@ function finish(
     returned: toReturnedSnapshot(snapshot),
     effects: interpretActions(
       machine,
+      selfAddress,
       snapshot,
       actions,
       knownChildIds,
@@ -151,60 +163,54 @@ interface MutableSnapshot {
 
 // resolveState drops live children; re-inject stub refs for known children so
 // sendTo/forwardTo targeting them resolve to routable actions. Actor refs stored
-// in context use XState's serialized actor marker; replace those markers with
-// the exact same stubs so XState's child ownership checks also succeed.
+// in context use XState's serialized actor marker; replace the markers that
+// address one of these children with the exact same stubs so XState's child
+// ownership checks also succeed.
 function injectStubChildren(
   snapshot: AnyMachineSnapshot,
+  selfAddress: string,
   knownChildIds: readonly string[],
 ): void {
   const mutable = snapshot as unknown as MutableSnapshot;
   // XState freezes the empty `children` record produced by
   // `resolveState`. Replace it with a mutable copy before restoring stubs.
   const children = { ...mutable.children };
-  const refs = new Map<string, unknown>();
+  const byAddress = new Map<string, unknown>();
   for (const childId of knownChildIds) {
-    children[childId] ??= stubChildRef(childId);
-    refs.set(childId, children[childId]);
+    children[childId] ??= stubChildRef(childId, selfAddress);
+    byAddress.set(childAddress(selfAddress, childId), children[childId]);
   }
   mutable.children = children;
-  mutable.context = canonicalizeActorRefs(mutable.context, refs);
+  mutable.context = canonicalizeActorRefs(mutable.context, byAddress);
   // Timers restored with a child target point at the same canonical stubs.
   mutable.timers = mutable.timers.map((timer) => {
     const target = timer.target as { id?: unknown } | "self";
     const childId = target === "self" ? undefined : target.id;
-    return typeof childId === "string" && refs.has(childId)
-      ? { ...timer, target: refs.get(childId) }
+    return typeof childId === "string" && Object.hasOwn(children, childId)
+      ? { ...timer, target: children[childId] }
       : timer;
   });
 }
 
 /**
- * The actor id in the last segment of an XState actor address
- * (`parent/child`), decoding XState's `%2F`/`%25` segment escapes.
+ * The address in XState's serialized actor ref (`{ $actor, incarnation? }`),
+ * or in a live ref, or `undefined` for anything else. Refs are matched by full
+ * address: a ref from another instance can end in the same id as one of ours.
  */
-function addressId(address: string): string {
-  const segment = address.slice(address.lastIndexOf("/") + 1);
-  return segment.replaceAll("%2F", "/").replaceAll("%25", "%");
-}
-
-/**
- * Find an XState actor id on either a serialized marker or a live ref. XState
- * serializes an actor ref as `{ $actor: address, incarnation? }`.
- */
-function actorRefId(value: object): string | undefined {
+function actorRefAddress(value: object): string | undefined {
   const candidate = value as Record<string, unknown>;
   if (typeof candidate.$actor === "string") {
-    const extraKeys = Object.keys(candidate).filter(
-      (key) => key !== "$actor" && key !== "incarnation",
+    const onlyMarkerKeys = Object.keys(candidate).every(
+      (key) => key === "$actor" || key === "incarnation",
     );
-    return extraKeys.length === 0 ? addressId(candidate.$actor) : undefined;
+    return onlyMarkerKeys ? candidate.$actor : undefined;
   }
   if (
-    typeof candidate.id === "string" &&
+    typeof candidate.address === "string" &&
     candidate.ref === value &&
     typeof candidate.send === "function"
   ) {
-    return candidate.id;
+    return candidate.address;
   }
   return undefined;
 }
@@ -212,17 +218,19 @@ function actorRefId(value: object): string | undefined {
 /** Recursively replace persisted actor refs without mutating user context. */
 function canonicalizeActorRefs(
   value: unknown,
-  refs: ReadonlyMap<string, unknown>,
+  byAddress: ReadonlyMap<string, unknown>,
 ): unknown {
   if (typeof value !== "object" || value === null) return value;
 
-  const actorId = actorRefId(value);
-  if (actorId !== undefined && refs.has(actorId)) return refs.get(actorId);
+  const address = actorRefAddress(value);
+  if (address !== undefined && byAddress.has(address)) {
+    return byAddress.get(address);
+  }
 
   if (Array.isArray(value)) {
     let changed = false;
     const result = value.map((item) => {
-      const next = canonicalizeActorRefs(item, refs);
+      const next = canonicalizeActorRefs(item, byAddress);
       changed ||= next !== item;
       return next;
     });
@@ -235,7 +243,7 @@ function canonicalizeActorRefs(
   let changed = false;
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    const next = canonicalizeActorRefs(item, refs);
+    const next = canonicalizeActorRefs(item, byAddress);
     changed ||= next !== item;
     result[key] = next;
   }
@@ -244,6 +252,7 @@ function canonicalizeActorRefs(
 
 function interpretActions(
   machine: AnyStateMachine,
+  selfAddress: string,
   snapshot: AnyMachineSnapshot,
   actions: Action[],
   knownChildIds: readonly string[],
@@ -324,7 +333,7 @@ function interpretActions(
 
   // 3. Sends, delayed sends, and cancellations.
   for (const action of actions) {
-    const effect = toEffect(machine, action, activeChildren);
+    const effect = toEffect(machine, selfAddress, action, activeChildren);
     if (effect) effects.push(effect);
   }
 
@@ -421,6 +430,7 @@ function scheduleTimer(
 /** Translate one send/raise/cancel effect into an Effect (or none). */
 function toEffect(
   machine: AnyStateMachine,
+  selfAddress: string,
   action: Action,
   activeChildren: ReadonlySet<string>,
 ): Effect | undefined {
@@ -440,7 +450,12 @@ function toEffect(
       if (action.delay !== undefined) {
         return scheduleTimer(action, action.delay);
       }
-      const target = targetOf(machine, action.target, activeChildren);
+      const target = targetOf(
+        machine,
+        selfAddress,
+        action.target,
+        activeChildren,
+      );
       if (!target) return undefined;
       return { kind: "send", target, event: action.event as AnyEventObject };
     }
@@ -463,12 +478,28 @@ function toEffect(
 /** Resolve a `@xstate.sendTo` target ref to a routing destination. */
 function targetOf(
   machine: AnyStateMachine,
+  selfAddress: string,
   target: unknown,
   activeChildren: ReadonlySet<string>,
 ): Target | undefined {
-  const ref = target as ActorLike | undefined;
-  const id =
-    ref?.id ?? (ref === undefined ? undefined : actorRefId(ref as object));
+  if (typeof target !== "object" || target === null) return undefined;
+  // A serialized ref XState could not resolve (e.g. one received from another
+  // instance) routes only if it addresses this instance or one of its own
+  // active children exactly.
+  if (typeof (target as { $actor?: unknown }).$actor === "string") {
+    const address = actorRefAddress(target);
+    if (address === selfAddress) return { type: "self" };
+    for (const childId of activeChildren) {
+      if (address === childAddress(selfAddress, childId)) {
+        return { type: "child", childId };
+      }
+    }
+    return undefined;
+  }
+  // A live ref comes from this instance's own transition: its parent, one of
+  // its children, or itself.
+  const ref = target as ActorLike;
+  const id = ref.id;
   if (id === PARENT_ID) return { type: "parent" };
   if (id !== undefined && activeChildren.has(id)) {
     return { type: "child", childId: id };

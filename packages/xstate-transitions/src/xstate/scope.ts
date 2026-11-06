@@ -83,9 +83,11 @@ const internalsOf = (machine: AnyStateMachine): MachineInternals =>
 // actor a fake `_parent` makes XState resolve those into ordinary
 // `@xstate.sendTo` actions whose `target.id` is #_parent, which the integration
 // routes to the parent object. It is also the restored target of a pending
-// timer that sends to the parent.
+// timer that sends to the parent. Its `address` roots the addresses XState
+// gives a child instance and its own children (see `instanceAddress`).
 const FAKE_PARENT = {
   id: PARENT_ID,
+  address: PARENT_ID,
   sessionId: PARENT_ID,
   send: () => {},
   _send: () => {},
@@ -99,18 +101,43 @@ const FAKE_PARENT = {
 /** The stand-in parent ref, for restoring timers that target the parent. */
 export const parentRef: unknown = FAKE_PARENT;
 
+/** One segment of an XState actor address, escaped as XState escapes it. */
+function addressSegment(id: string): string {
+  return id.replaceAll("%", "%25").replaceAll("/", "%2F");
+}
+
+/**
+ * The actor address XState gives this instance while it transitions: the
+ * machine id for a root, and the machine id under the fake parent for a child.
+ * Serialized actor refs (`{ $actor: address }`) are compared against it.
+ */
+export function instanceAddress(
+  machine: AnyStateMachine,
+  isChild: boolean,
+): string {
+  const self = addressSegment(machine.id);
+  return isChild ? `${FAKE_PARENT.address}/${self}` : self;
+}
+
+/** The address XState gives a child of the instance at `parentAddress`. */
+export function childAddress(parentAddress: string, childId: string): string {
+  return `${parentAddress}/${addressSegment(childId)}`;
+}
+
 /**
  * A minimal stand-in for a child actor ref. `resolveState` drops live children,
  * so before transitioning we re-inject one of these per persisted child so that
  * `sendTo`/`forwardTo` targeting the child resolves to a routable action instead
  * of a communication error. XState also reads its active status and `ref`
  * identity during child ownership checks. `toJSON` emits XState's actor-ref
- * marker (`{ $actor }`) when Restate persists the planned snapshot. The stub itself is never
- * run.
+ * marker (`{ $actor: address }`) when Restate persists the planned snapshot.
+ * The stub itself is never run.
  */
-export function stubChildRef(id: string): unknown {
+export function stubChildRef(id: string, parentAddress: string): unknown {
+  const address = childAddress(parentAddress, id);
   const ref = {
     id,
+    address,
     sessionId: id,
     send: () => {},
     _send: () => {},
@@ -118,7 +145,7 @@ export function stubChildRef(id: string): unknown {
     on: () => ({ unsubscribe: () => {} }),
     _parent: undefined,
     _processingStatus: 1,
-    toJSON: () => ({ $actor: id }),
+    toJSON: () => ({ $actor: address }),
     ref: undefined as unknown,
   };
   ref.ref = ref;

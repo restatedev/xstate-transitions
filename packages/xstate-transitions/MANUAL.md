@@ -410,6 +410,12 @@ to explicit JSON-safe representations first. Actor references created by
 supported `spawn` patterns are reconstructed only for routing; they are not
 general serializable application data.
 
+Only two kinds of actor reference stay routable after they are persisted in
+context: a reference to one of the instance's own children, and its own
+`self`. A reference received from another instance (for example a child
+passing up a reference to its own child) is never routed: a `sendTo` to it is
+dropped, even if its id matches a local child's.
+
 Runtime ingress schemas do not enforce this invariant: they validate public
 input/events, while later transitions and actor outputs can still put an
 unserializable value into context. Keep context types JSON-shaped and test
@@ -1007,6 +1013,14 @@ transition, the core reinjects inert stubs for known persisted child and promise
 actor IDs. This prevents active actors from being restarted and lets `sendTo`
 and `forwardTo` resolve child targets without trying to revive an in-memory
 actor.
+
+References persisted in context come back as XState's `{ $actor: address }`
+markers. A marker is replaced with a child's stub only when its address is
+exactly that child's address under this instance (`<machine id>/<child id>`
+for a root, `#_parent/<machine id>/<child id>` for a child instance), and
+routes to `self` when it is the instance's own address. Matching on the full
+address, not the trailing id, keeps a reference from another instance from
+being mistaken for, and sent to or stopped as, a same-named local child.
 
 ## Handler and commit lifecycle
 

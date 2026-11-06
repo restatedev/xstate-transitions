@@ -16,7 +16,7 @@ import type {
   SnapshotFrom,
   SnapshotStatus,
 } from "xstate";
-import { PARENT_ID, parentRef, stubChildRef } from "./scope";
+import { PARENT_ID, parentRef } from "./scope";
 import type {
   ReturnedSnapshot,
   StoredState,
@@ -86,8 +86,9 @@ function deserializeTimerTarget(target: Target): LiveTimer["target"] {
     case "parent":
       return parentRef as LiveTimer["target"];
     case "child":
-      // Swapped for the canonical child stub when children are re-injected.
-      return stubChildRef(target.childId) as LiveTimer["target"];
+      // Swapped for the canonical child stub when children are re-injected;
+      // a child no longer known stays a bare id that routing drops.
+      return { id: target.childId };
   }
 }
 

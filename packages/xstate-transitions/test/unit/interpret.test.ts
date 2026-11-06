@@ -902,10 +902,114 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(stopped.effects, "stopChild")).toEqual([
       { kind: "stopChild", childId: "kid" },
     ]);
+    // The stub re-persists under the same address XState gave the live child.
     expect(JSON.parse(JSON.stringify(stopped.nextState)).context.ref).toEqual({
-      $actor: "kid",
+      $actor: "parent/kid",
     });
   });
+});
+
+describe("resumeStep() — actor refs held in context", () => {
+  // Restate persists context as JSON, so actor refs come back as XState's
+  // `{ $actor: <address> }` markers. Only a marker addressing one of this
+  // instance's own children may resolve to that child; any other ref (one
+  // received from another instance, such as a child's own child) must never be
+  // mistaken for a local child that happens to share its id.
+  const kid = createMachine({ id: "kid-logic" });
+  const holder = (id: string) =>
+    setup({ actors: { kid } }).createMachine({
+      id,
+      context: { ref: undefined as unknown },
+      initial: "running",
+      states: {
+        running: {
+          entry: (_, enq) => ({
+            context: { ref: enq.spawn("kid", { id: "kid" }) },
+          }),
+          on: {
+            ADOPT: ({ event }) => ({
+              context: { ref: (event as { ref?: unknown }).ref },
+            }),
+            KEEP_SELF: ({ self }) => ({ context: { ref: self } }),
+            POKE: ({ context }, enq) => {
+              enq.sendTo(context.ref as never, { type: "PING" });
+            },
+            STOP: ({ context }, enq) => {
+              enq.stop(context.ref as never);
+            },
+          },
+        },
+      },
+    });
+
+  const run = (
+    machine: ReturnType<typeof holder>,
+    isChild: boolean,
+    events: { type: string; ref?: unknown }[],
+  ) => {
+    let stored = initialStep(machine, { isChild }).nextState;
+    let result: ReturnType<typeof resumeStep> | undefined;
+    for (const event of events) {
+      result = resumeStep(machine, {
+        stored: JSON.parse(JSON.stringify(stored)) as StoredState,
+        event,
+        isChild,
+        knownChildIds: ["kid"],
+        knownPromiseIds: [],
+      });
+      stored = result.nextState;
+    }
+    return result!;
+  };
+
+  for (const isChild of [false, true]) {
+    const scope = isChild ? "child instance" : "root instance";
+
+    it(`routes a persisted ref to its own child (${scope})`, () => {
+      const result = run(holder("owner"), isChild, [{ type: "POKE" }]);
+      expect(result.effects).toEqual([
+        {
+          kind: "send",
+          target: { type: "child", childId: "kid" },
+          event: { type: "PING" },
+        },
+      ]);
+    });
+
+    it(`routes a persisted self ref to itself (${scope})`, () => {
+      const result = run(holder("owner"), isChild, [
+        { type: "KEEP_SELF" },
+        { type: "POKE" },
+      ]);
+      expect(result.effects).toEqual([
+        { kind: "send", target: { type: "self" }, event: { type: "PING" } },
+      ]);
+    });
+
+    it(`does not route a foreign ref to a same-named child (${scope})`, () => {
+      // A grandchild's ref, as a child instance would send it up.
+      const foreign = { $actor: "#_parent/other/kid" };
+      const result = run(holder("owner"), isChild, [
+        { type: "ADOPT", ref: foreign },
+        { type: "POKE" },
+      ]);
+      expect(byKind(result.effects, "send")).toEqual([]);
+    });
+
+    it(`does not stop a same-named child through a foreign ref (${scope})`, () => {
+      const foreign = { $actor: "elsewhere/kid" };
+      let stopped: Effect[] = [];
+      try {
+        stopped = run(holder("owner"), isChild, [
+          { type: "ADOPT", ref: foreign },
+          { type: "STOP" },
+        ]).effects;
+      } catch {
+        // XState refusing to stop an actor that is not its child is fine.
+      }
+      expect(byKind(stopped, "stopChild")).toEqual([]);
+    });
+  }
 });
 
 describe("step — resolution semantics", () => {
