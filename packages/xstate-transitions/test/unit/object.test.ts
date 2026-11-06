@@ -11,9 +11,11 @@
 
 import { describe, expect, it } from "vitest";
 import { createMachine } from "xstate";
+import { TerminalError } from "@restatedev/restate-sdk";
 import {
   classifyKnownActors,
   createMachineObject,
+  restoreSnapshot,
 } from "../../src/restate/object";
 
 describe("createMachineObject configuration", () => {
@@ -133,3 +135,24 @@ function getHandlerOptions(handler: unknown): HandlerOptions {
 
   throw new TypeError("Expected a configured Restate handler");
 }
+
+describe("restoreSnapshot", () => {
+  it("fails terminally when the stored state no longer fits the machine", () => {
+    // E.g. a state removed in a later deploy: retrying cannot help.
+    const machine = createMachine({
+      id: "drifted",
+      initial: "a",
+      states: { a: {} },
+    });
+    const stored = {
+      value: "removed",
+      context: {},
+      status: "active" as const,
+      historyValue: {},
+    };
+    expect(() => restoreSnapshot(machine, stored)).toThrow(TerminalError);
+    expect(() => restoreSnapshot(machine, stored)).toThrow(
+      /stored state does not fit machine "drifted"/,
+    );
+  });
+});

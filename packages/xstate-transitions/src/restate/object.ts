@@ -19,6 +19,7 @@ import type {
 import {
   createDoneActorEvent,
   createNormalizedErrorActorEvent,
+  normalizeError,
 } from "../xstate/actors";
 import { evaluateCondition, isValidCondition } from "../xstate/conditions";
 import { initialStep, resumeStep } from "../xstate/interpret";
@@ -38,6 +39,7 @@ import {
   genericEventSchema,
 } from "./schemas";
 import {
+  disposeChildren,
   executeEffects,
   maybeScheduleCleanup,
   rejectSubscriptions,
@@ -439,8 +441,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     await validateNotDisposed(context);
     const stored = await getRequiredState(context);
     const machine = this.runtime.resolveMachine(await getMachineId(context));
-    const snapshot = fromStored(machine, stored);
-    return toReturnedSnapshot(snapshot);
+    return toReturnedSnapshot(restoreSnapshot(machine, stored));
   }
 
   async subscribe(
@@ -452,8 +453,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     validateCondition(request.condition);
 
     const machine = this.runtime.resolveMachine(await getMachineId(context));
-    const snapshot = fromStored(machine, stored);
-    const returned = toReturnedSnapshot(snapshot);
+    const returned = toReturnedSnapshot(restoreSnapshot(machine, stored));
     const outcome = evaluateCondition(returned, request.condition);
 
     if (outcome.status === "resolve") {
@@ -599,7 +599,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     context: restate.ObjectSharedContext,
     request: ExecuteRequest,
   ): Promise<void> {
-    const machine = this.runtime.resolveMachine(await getMachineId(context));
+    const machine = this.runtime.resolveMachine(request.machineId);
     const outcome = await runActor(machine, request.params, context);
     const sender = context.objectSendClient<MachineInternalVirtualObject>(
       this.runtime.self,
@@ -626,6 +626,7 @@ class MachineHandlers<M extends AnyStateMachine> {
       context,
       "State machine was disposed before the condition was met",
     );
+    await disposeChildren(context, this.runtime.self);
     markDisposedAndClear(context);
   }
 
@@ -638,6 +639,7 @@ class MachineHandlers<M extends AnyStateMachine> {
       context,
       "State machine was disposed before the condition was met",
     );
+    await disposeChildren(context, this.runtime.self);
     markDisposedAndClear(context);
   }
 }
@@ -679,6 +681,7 @@ async function initializeRoot<M extends AnyStateMachine>(
     context,
     "State machine was reset before the condition was met",
   );
+  await disposeChildren(context, runtime.self);
   clearRuntimeState(context);
   clearIdentity(context);
 
@@ -695,16 +698,35 @@ async function initializeChild(
   const machine = runtime.resolveMachine(request.machineId);
   // Compute first, as in `create`, so a failing initial transition has no
   // side effects.
-  const result = await computeStep(context, "initChild", () =>
-    initialStep(machine, {
-      input: request.input,
-      isChild: true,
-    }),
-  );
+  let result: Step;
+  try {
+    result = await computeStep(context, "initChild", () =>
+      initialStep(machine, {
+        input: request.input,
+        isChild: true,
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof restate.TerminalError)) throw error;
+    // The child never started. Report it as the child's error so the parent
+    // can take `onError` instead of waiting for a completion that never comes.
+    context
+      .objectSendClient<MachineInternalVirtualObject>(
+        runtime.self,
+        request.parentKey,
+      )
+      .actorError({
+        actorId: request.invokeId,
+        executionId: request.executionId,
+        error: normalizeError(error),
+      });
+    return;
+  }
   await rejectSubscriptions(
     context,
     "State machine was reset before the condition was met",
   );
+  await disposeChildren(context, runtime.self);
   clearRuntimeState(context);
   setIdentity(context, request);
 
@@ -815,6 +837,29 @@ function computeStep(
       throw transitionFailure(label, error);
     }
   });
+}
+
+/**
+ * Restore a persisted state outside a transition (for reads). A stored state
+ * that no longer fits the machine (e.g. a state removed in a later deploy)
+ * fails on every attempt, so it fails terminally instead of being retried.
+ */
+export function restoreSnapshot(
+  machine: AnyStateMachine,
+  stored: StoredState,
+): ReturnType<typeof fromStored> {
+  try {
+    return fromStored(machine, stored);
+  } catch (error) {
+    const detail =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
+    throw new restate.TerminalError(
+      `The stored state does not fit machine "${machine.id}": ${detail}`,
+      { errorCode: 500 },
+    );
+  }
 }
 
 /** The terminal error reported for a transition that threw. */

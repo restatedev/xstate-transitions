@@ -67,6 +67,8 @@ export type MachineObjectOptions = {
 export interface ExecuteRequest {
   readonly params: SpawnParams;
   readonly executionId: string;
+  /** The requesting instance's machine id (`null` for the root machine). */
+  readonly machineId: string | null;
 }
 
 /** A successful actor execution delivered through an ingress-private handler. */

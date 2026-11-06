@@ -214,7 +214,8 @@ function terminatedChild(
 ): { id: string; status: StubStatus } | undefined {
   const actorId = (event as { actorId?: unknown }).actorId;
   if (typeof actorId !== "string") return undefined;
-  if (event.type === "xstate.done.actor") return { id: actorId, status: "done" };
+  if (event.type === "xstate.done.actor")
+    return { id: actorId, status: "done" };
   if (event.type === "xstate.error.actor") {
     return { id: actorId, status: "error" };
   }

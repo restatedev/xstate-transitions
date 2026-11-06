@@ -35,6 +35,11 @@ export type RunningMachine<SnapshotType> = {
   create: (input?: unknown) => Promise<void>;
   send: (event: AnyEventObject) => Promise<void>;
   snapshot(): Promise<SnapshotType>;
+  /**
+   * The snapshot of another object of the same machine service, such as a
+   * child instance (keyed `<parentKey>::<childId>`).
+   */
+  snapshotOf(key: string): Promise<unknown>;
   waitFor(condition: Condition, timeout?: number): Promise<SnapshotType>;
   [Symbol.dispose](): void;
 };
@@ -85,6 +90,15 @@ export async function createRestateTestActor<
 
       snapshot: async () => {
         return (await client.snapshot()) as SnapshotType;
+      },
+
+      snapshotOf: async (key: string) => {
+        return await rs
+          .objectClient<MachineVirtualObject<AnyStateMachine>>(
+            { name: "default" },
+            key,
+          )
+          .snapshot();
       },
 
       waitFor: async (condition: Condition, timeout?: number) => {

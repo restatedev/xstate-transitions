@@ -11,6 +11,7 @@
 
 import type { AnyMachineSnapshot, AnyStateMachine } from "xstate";
 import { createActor } from "xstate";
+import { reachableMachines } from "./registry";
 import type { Action } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -232,13 +233,25 @@ export function createTransitionScope(
  */
 export const DEFAULT_MAX_ITERATIONS = 1000;
 
-/** Bound the machine's macrosteps unless it chose its own bound. */
+const guardedRoots = new WeakSet<AnyStateMachine>();
+
+/**
+ * Bound the macrosteps of the machine and every machine it can spawn, unless
+ * one chose its own bound. Spawning a child machine computes the child's
+ * initial snapshot inside the parent's step, so an unbounded child would
+ * exhaust memory there.
+ */
 function guardInfiniteLoops(machine: AnyStateMachine): void {
-  // `options` is the machine's own copy of its config options.
-  const options = (machine as { options?: { maxIterations?: number } }).options;
-  if (options !== undefined) {
-    options.maxIterations ??= DEFAULT_MAX_ITERATIONS;
+  if (guardedRoots.has(machine)) return;
+  for (const reachable of reachableMachines(machine)) {
+    // `options` is the machine's own copy of its config options.
+    const options = (reachable as { options?: { maxIterations?: number } })
+      .options;
+    if (options !== undefined) {
+      options.maxIterations ??= DEFAULT_MAX_ITERATIONS;
+    }
   }
+  guardedRoots.add(machine);
 }
 
 /**

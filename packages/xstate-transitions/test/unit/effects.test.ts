@@ -12,6 +12,7 @@
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
+  disposeChildren,
   executeEffects,
   maybeScheduleCleanup,
   rejectSubscriptions,
@@ -111,12 +112,45 @@ describe("executeEffects", () => {
       {
         key: "parent-key",
         method: "executeActor",
-        args: [{ params, executionId: "uuid-1" }],
+        args: [{ params, executionId: "uuid-1", machineId: null }],
       },
     ]);
     expect(harness.state.get("actorExecutions")).toEqual({
       work: "uuid-1",
     });
+  });
+
+  it("disposes every owned child machine", async () => {
+    const harness = createHarness();
+    harness.state.set("children", {
+      a: { key: "parent-key::a", machineId: "child" },
+      b: { key: "parent-key::b", machineId: "child" },
+    });
+
+    await disposeChildren(harness.context as never, harness.handler.self);
+
+    expect(harness.clientCalls).toEqual([
+      { key: "parent-key::a", method: "cleanupState", args: [] },
+      { key: "parent-key::b", method: "cleanupState", args: [] },
+    ]);
+  });
+
+  it("names the requesting instance's machine on the actor request", async () => {
+    // The runner resolves the actor against this machine, not whatever the
+    // object holds when the request runs (it may have been reset or disposed).
+    const harness = createHarness();
+    harness.state.set("machineId", "child-machine");
+    const params: SpawnParams = { id: "work", src: "work" };
+
+    await executeEffects(harness.handler, [{ kind: "runPromise", params }]);
+
+    expect(harness.clientCalls).toEqual([
+      {
+        key: "parent-key",
+        method: "executeActor",
+        args: [{ params, executionId: "uuid-1", machineId: "child-machine" }],
+      },
+    ]);
   });
 
   it("persists a child before routing later effects to it", async () => {
@@ -196,7 +230,7 @@ describe("executeEffects", () => {
       {
         key: "parent-key",
         method: "executeActor",
-        args: [{ params, executionId: "uuid-1" }],
+        args: [{ params, executionId: "uuid-1", machineId: null }],
       },
     ]);
   });
