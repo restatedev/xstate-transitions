@@ -1041,6 +1041,110 @@ describe("resumeStep() — actor refs held in context", () => {
   }
 });
 
+describe("resumeStep() — child lifecycle", () => {
+  const step = (
+    machine: Parameters<typeof resumeStep>[0],
+    stored: StoredState,
+    event: { type: string } & Record<string, unknown>,
+    knownChildIds: string[],
+  ) =>
+    resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(stored)) as StoredState,
+      event,
+      isChild: false,
+      knownChildIds,
+      knownPromiseIds: [],
+    });
+
+  it("respawns a finished child under the same id from its done handler", () => {
+    // XState frees a terminated child's id while its completion is handled
+    // (the supervisor pattern), so the respawn must start a fresh child.
+    const worker = createMachine({ id: "worker-logic" });
+    const machine = setup({ actors: { worker } }).createMachine({
+      id: "supervisor",
+      context: { restarts: 0 },
+      entry: (_, enq) => {
+        enq.spawn("worker", { id: "kid" });
+      },
+      on: {
+        "xstate.done.actor": ({ context }, enq) => {
+          enq.spawn("worker", { id: "kid" });
+          return { context: { restarts: context.restarts + 1 } };
+        },
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const done = step(
+      machine,
+      created.nextState,
+      { type: "xstate.done.actor", actorId: "kid", sessionId: "kid" },
+      ["kid"],
+    );
+    expect(done.nextState.context).toEqual({ restarts: 1 });
+    expect(done.effects).toEqual([
+      { kind: "stopChild", childId: "kid" },
+      {
+        kind: "startChild",
+        childId: "kid",
+        machineId: "worker-logic",
+        input: undefined,
+      },
+    ]);
+  });
+
+  it("delivers a send to a child before stopping it in the same step", () => {
+    // XState emits the send before the stop; the child must receive it.
+    const worker = createMachine({ id: "worker-logic" });
+    const machine = setup({ actors: { worker } }).createMachine({
+      id: "farewell",
+      entry: (_, enq) => {
+        enq.spawn("worker", { id: "kid" });
+      },
+      on: {
+        BYE: ({ children }, enq) => {
+          enq.sendTo(children.kid as never, { type: "BYE" });
+          enq.stop(children.kid as never);
+        },
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const bye = step(machine, created.nextState, { type: "BYE" }, ["kid"]);
+    expect(bye.effects).toEqual([
+      {
+        kind: "send",
+        target: { type: "child", childId: "kid" },
+        event: { type: "BYE" },
+      },
+      { kind: "stopChild", childId: "kid" },
+    ]);
+  });
+
+  it("stops a finished child once its completion is handled", () => {
+    // XState drops a terminated child from `children`; the durable child
+    // object must be torn down rather than leak.
+    const worker = createMachine({ id: "worker-logic" });
+    const machine = setup({ actors: { worker } }).createMachine({
+      id: "reaper",
+      initial: "running",
+      states: {
+        running: {
+          invoke: { src: "worker", id: "kid", onDone: { target: "after" } },
+        },
+        after: {},
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const done = step(
+      machine,
+      created.nextState,
+      { type: "xstate.done.actor", actorId: "kid", sessionId: "kid" },
+      ["kid"],
+    );
+    expect(done.nextState.value).toBe("after");
+    expect(done.effects).toEqual([{ kind: "stopChild", childId: "kid" }]);
+  });
+});
+
 describe("step — resolution semantics", () => {
   it("settles exit, transition, entry, raised, and always actions in order", () => {
     type Ctx = { trace: string[] };

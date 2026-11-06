@@ -133,6 +133,13 @@ export function childIdAt(
 }
 
 /**
+ * The status a child stub reports. A child whose completion is being applied
+ * reports `done`/`error`, which frees its id for a respawn in the same step,
+ * as XState does for a live child.
+ */
+export type StubStatus = "active" | "stopped" | "done" | "error";
+
+/**
  * A minimal stand-in for a child actor ref. `resolveState` drops live children,
  * so before transitioning we re-inject one of these per persisted child so that
  * `sendTo`/`forwardTo` targeting the child resolves to a routable action instead
@@ -149,7 +156,7 @@ export function childIdAt(
 export function stubChildRef(
   id: string,
   parent: { address: string },
-  status: "active" | "stopped" = "active",
+  status: StubStatus = "active",
 ): unknown {
   const address = childAddress(parent.address, id);
   const ref = {

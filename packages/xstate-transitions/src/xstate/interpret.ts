@@ -26,6 +26,7 @@ import {
   runInitial,
   runTransition,
   stubChildRef,
+  type StubStatus,
 } from "./scope";
 import { fromStored, toReturnedSnapshot, toStored } from "./snapshot";
 import type {
@@ -103,10 +104,12 @@ export function initialStep(machine: AnyStateMachine, input: InitInput): Step {
 export function resumeStep(machine: AnyStateMachine, input: ResumeInput): Step {
   const snapshot = fromStored(machine, input.stored);
   const scope = createTransitionScope(machine, input.isChild, snapshot);
-  injectStubChildren(snapshot, scope.self, [
-    ...input.knownChildIds,
-    ...input.knownPromiseIds,
-  ]);
+  injectStubChildren(
+    snapshot,
+    scope.self,
+    [...input.knownChildIds, ...input.knownPromiseIds],
+    terminatedChild(input.event),
+  );
   const [next, actions] = runTransition(machine, snapshot, input.event, scope);
   return finish(
     machine,
@@ -168,6 +171,7 @@ function injectStubChildren(
   snapshot: AnyMachineSnapshot,
   self: { address: string },
   knownChildIds: readonly string[],
+  terminated: { id: string; status: StubStatus } | undefined,
 ): void {
   const mutable = snapshot as unknown as MutableSnapshot;
   // XState freezes the empty `children` record produced by
@@ -175,7 +179,8 @@ function injectStubChildren(
   const children = { ...mutable.children };
   const byAddress = new Map<string, unknown>();
   for (const childId of knownChildIds) {
-    children[childId] ??= stubChildRef(childId, self);
+    const status = terminated?.id === childId ? terminated.status : "active";
+    children[childId] ??= stubChildRef(childId, self, status);
     byAddress.set(childAddress(self.address, childId), children[childId]);
   }
   mutable.children = children;
@@ -197,6 +202,23 @@ function injectStubChildren(
       ? { ...timer, target: children[childId] }
       : timer;
   });
+}
+
+/**
+ * The child whose completion `event` reports, if any. Its stub reports that
+ * terminal status while the event is applied, so (as for a live child) its id
+ * is free to be respawned while the completion is handled.
+ */
+function terminatedChild(
+  event: AnyEventObject,
+): { id: string; status: StubStatus } | undefined {
+  const actorId = (event as { actorId?: unknown }).actorId;
+  if (typeof actorId !== "string") return undefined;
+  if (event.type === "xstate.done.actor") return { id: actorId, status: "done" };
+  if (event.type === "xstate.error.actor") {
+    return { id: actorId, status: "error" };
+  }
+  return undefined;
 }
 
 /**
@@ -271,88 +293,83 @@ function interpretActions(
   const activeChildren = new Set(knownChildIds);
   const activePromises = new Set(knownPromiseIds);
   const effects: Effect[] = [];
+  // The children XState settled on at the end of the step.
+  const settled = (snapshot.children ?? {}) as Record<string, unknown>;
 
-  // Actors (re)started and explicitly stopped this step. XState v6 emits
-  // `@xstate.spawn` for every invoke/spawn (id, resolved input, `src`/`logic`),
-  // and `@xstate.stop` when a transition stops an actor via `enq.stop(ref)`.
-  const spawned = new Map<string, SpawnExecutableEffect>();
-  const stoppedIds = new Set<string>();
+  const stop = (id: string): void => {
+    if (activeChildren.delete(id)) {
+      effects.push({ kind: "stopChild", childId: id });
+    } else if (activePromises.delete(id)) {
+      effects.push({ kind: "stopPromise", actorId: id });
+    }
+  };
+
+  // Effects are translated in the order XState emitted them, so a send that
+  // precedes a stop (or follows a start) in the step reaches the child.
   for (const action of actions) {
-    if (!isBuiltInExecutableEffect(action)) continue;
-    if (action.type === "@xstate.spawn") {
-      spawned.set(action.id, action);
-    } else if (action.type === "@xstate.stop") {
-      // Context-held refs are canonicalized before the transition. Retain the
-      // explicit id so the emitted stop action tears down the durable child.
+    if (isBuiltInExecutableEffect(action) && action.type === "@xstate.spawn") {
+      // A fresh spawn under an active id replaces the prior incarnation
+      // (a reentered invoke, or a respawn after the child finished).
+      stop(action.id);
+      // Start only the incarnation XState kept: a spawn stopped later in the
+      // same step, or superseded by a later spawn of the same id, never ran.
+      if (settled[action.id] !== action.actor) continue;
+      effects.push(startEffect(machine, action));
+      if (effects.at(-1)?.kind === "startChild") {
+        activeChildren.add(action.id);
+      } else {
+        activePromises.add(action.id);
+      }
+      continue;
+    }
+    if (isBuiltInExecutableEffect(action) && action.type === "@xstate.stop") {
+      // Context-held refs are canonicalized before the transition, so the
+      // stopped actor carries the durable child's id.
       const stoppedId = action.actor?.id;
-      if (stoppedId !== undefined) stoppedIds.add(stoppedId);
+      if (stoppedId !== undefined) stop(stoppedId);
+      continue;
     }
-  }
-
-  // 1. Stop persisted actors. An exited invoke disappears from
-  //    `snapshot.children` and emits a stop action. A reentered actor stays in
-  //    children but is re-spawned this step, so a fresh spawn also implies
-  //    stopping the prior incarnation. Stopping here removes it from the active
-  //    sets; step 2 re-adds a reentered actor as a start (stop-then-start).
-  const liveChildren = childIdsOf(snapshot);
-  const isStopped = (id: string): boolean =>
-    !liveChildren.has(id) || spawned.has(id) || stoppedIds.has(id);
-  for (const childId of knownChildIds) {
-    if (isStopped(childId) && activeChildren.delete(childId)) {
-      effects.push({ kind: "stopChild", childId });
-    }
-  }
-  for (const actorId of knownPromiseIds) {
-    if (isStopped(actorId) && activePromises.delete(actorId)) {
-      effects.push({ kind: "stopPromise", actorId });
-    }
-  }
-
-  // 2. Start newly spawned/invoked actors. The `src`/`logic` tell a child
-  //    machine (its own virtual object) from a promise/handler actor (run
-  //    out-of-band). A spawn that XState cancelled within this same macrostep
-  //    (spawn-then-stop) is absent from the settled children; starting it would
-  //    run an effect XState discarded, so only start spawns that survive.
-  for (const [id, action] of spawned) {
-    if (activeChildren.has(id) || activePromises.has(id)) continue;
-    if (!liveChildren.has(id)) continue;
-
-    const childMachine = resolveChildMachine(machine, action.src, action.logic);
-    if (childMachine !== undefined) {
-      effects.push({
-        kind: "startChild",
-        childId: id,
-        machineId: childMachine.id,
-        input: action.input,
-      });
-      activeChildren.add(id);
-    } else {
-      // The runner resolves `src` by name in another Restate call, so inline
-      // invoke logic travels as a reference to its invoke definition.
-      const src =
-        typeof action.src === "string"
-          ? action.src
-          : (referenceInlineActor(machine, action.src) ?? action.src);
-      effects.push({
-        kind: "runPromise",
-        params: { id, src, input: action.input },
-      });
-      activePromises.add(id);
-    }
-  }
-
-  // 3. Sends, delayed sends, and cancellations.
-  for (const action of actions) {
     const effect = toEffect(machine, selfAddress, action, activeChildren);
     if (effect) effects.push(effect);
+  }
+
+  // Actors XState dropped without a stop effect (a child removed once its
+  // completion was handled) are torn down too.
+  for (const id of [...activeChildren, ...activePromises]) {
+    if (!Object.hasOwn(settled, id)) stop(id);
   }
 
   return effects;
 }
 
-/** The ids of actors still active in a snapshot's `children` map. */
-function childIdsOf(snapshot: AnyMachineSnapshot): ReadonlySet<string> {
-  return new Set(Object.keys(snapshot.children ?? {}));
+/**
+ * The effect that starts a spawned actor. The `src`/`logic` tell a child
+ * machine (its own virtual object) from a promise/handler actor (run
+ * out-of-band).
+ */
+function startEffect(
+  machine: AnyStateMachine,
+  action: SpawnExecutableEffect,
+): Effect {
+  const childMachine = resolveChildMachine(machine, action.src, action.logic);
+  if (childMachine !== undefined) {
+    return {
+      kind: "startChild",
+      childId: action.id,
+      machineId: childMachine.id,
+      input: action.input,
+    };
+  }
+  // The runner resolves `src` by name in another Restate call, so inline
+  // invoke logic travels as a reference to its invoke definition.
+  const src =
+    typeof action.src === "string"
+      ? action.src
+      : (referenceInlineActor(machine, action.src) ?? action.src);
+  return {
+    kind: "runPromise",
+    params: { id: action.id, src, input: action.input },
+  };
 }
 
 /**
