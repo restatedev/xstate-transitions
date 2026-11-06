@@ -36,6 +36,8 @@ interface RawSnapshot {
   tags?: Set<string>;
   timers?: readonly LiveTimer[];
   _nextTimerId?: number;
+  _stateInputs?: Record<string, unknown>;
+  _nextActorIds?: Record<string, number>;
 }
 
 /** A pending timer as XState holds it on a live snapshot. */
@@ -111,6 +113,8 @@ export function toStored(snapshot: AnyMachineSnapshot): StoredState {
     historyValue: serializeHistory(raw.historyValue),
     timers: serializeTimers(raw.timers),
     nextTimerId: raw._nextTimerId ?? 0,
+    stateInputs: { ...raw._stateInputs },
+    nextActorIds: { ...raw._nextActorIds },
   };
 }
 
@@ -127,14 +131,18 @@ export function fromStored<M extends AnyStateMachine>(
     error: stored.error,
     historyValue: deserializeHistory(machine, stored.historyValue),
   } as never) as SnapshotFrom<M>;
-  // `resolveState` starts with no pending timers. XState fires and cancels
-  // timers against this list, so restore it along with the timer sequence.
+  // `resolveState` restores only the configuration and context. Restore the
+  // rest of what XState carries between transitions: pending timers and their
+  // sequence, the inputs active states were entered with, and the counters
+  // that keep generated child ids from being reused.
   const raw = snapshot as unknown as RawSnapshot;
   raw.timers = (stored.timers ?? []).map((timer) => ({
     ...timer,
     target: deserializeTimerTarget(timer.target),
   }));
   raw._nextTimerId = stored.nextTimerId ?? 0;
+  raw._stateInputs = { ...stored.stateInputs };
+  raw._nextActorIds = { ...stored.nextActorIds };
   return snapshot;
 }
 

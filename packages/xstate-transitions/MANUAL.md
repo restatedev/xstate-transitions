@@ -1079,6 +1079,10 @@ interface StoredState {
   output?: unknown;
   error?: unknown;
   historyValue: Record<string, string[]>;
+  timers?: StoredTimer[];
+  nextTimerId?: number;
+  stateInputs?: Record<string, unknown>;
+  nextActorIds?: Record<string, number>;
 }
 ```
 
@@ -1087,6 +1091,18 @@ objects. `toStored` converts each node to its stable state-node ID;
 `fromStored` looks those IDs up through `machine.getStateNodeById` before calling
 `machine.resolveState`. This preserves shallow and deep history through JSON
 serialization and process loss.
+
+`resolveState` rebuilds only the configuration and context, so `fromStored`
+restores the rest of what XState carries between transitions:
+
+- `timers` and `nextTimerId`: pending delays and the sequence that numbers
+  unnamed ones (see [Delayed delivery and cancellation](#delayed-delivery-and-cancellation)).
+  A timer's target actor is stored as a routing `Target` and restored as the
+  same stub ref the scope uses.
+- `stateInputs`: the `input` each active state was entered with, which later
+  transitions, exit actions, and final output read.
+- `nextActorIds`: the per-source counters for generated child ids (`child:0`),
+  so an id freed by a stopped child is never reissued to a new one.
 
 `ReturnedSnapshot` is a separate boundary type. It adds sorted tags but omits
 internal history and live XState structures.

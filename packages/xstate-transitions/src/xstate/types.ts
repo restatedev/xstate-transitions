@@ -33,6 +33,13 @@ export interface StoredState {
   timers?: StoredTimer[];
   /** XState's sequence for numbering delayed sends scheduled without an `id`. */
   nextTimerId?: number;
+  /** The `input` each active state was entered with, keyed by state node id. */
+  stateInputs?: Record<string, unknown>;
+  /**
+   * XState's per-source counters for generated child ids (`child:0`), so an
+   * id freed by a stopped child is never handed out again.
+   */
+  nextActorIds?: Record<string, number>;
 }
 
 /**
