@@ -39,8 +39,12 @@ describe("toStored / fromStored", () => {
       "context",
       "error",
       "historyValue",
+      "nextActorIds",
+      "nextTimerId",
       "output",
+      "stateInputs",
       "status",
+      "timers",
       "value",
     ]);
     expect(stored.value).toBe("idle");

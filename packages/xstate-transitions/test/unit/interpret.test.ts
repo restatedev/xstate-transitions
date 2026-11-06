@@ -25,6 +25,15 @@ import type { Effect, StoredState } from "../../src/xstate/types";
 const byKind = (effects: Effect[], kind: Effect["kind"]) =>
   effects.filter((effect) => effect.kind === kind);
 
+/** The durable send id the interpreter derives from an XState timer key. */
+const timerId = (key: { id: string } | { seq: number } | { event: object }) =>
+  JSON.stringify(Object.entries(key)[0]);
+
+/** The `xstate.timer` event that fires a pending XState timer. */
+const timerEvent = (
+  key: { id: string } | { seq: number } | { event: object },
+) => ({ type: "xstate.timer", ...key });
+
 describe("initialStep()", () => {
   it("bakes an entry context patch into context and emits no effect for it", () => {
     const machine = createMachine({
@@ -53,6 +62,27 @@ describe("initialStep()", () => {
       (promises[0] as Extract<Effect, { kind: "runPromise" }>).params.id,
     ).toBe("w");
     expect(byKind(result.effects, "startChild")).toHaveLength(0);
+  });
+
+  it("names inline promise logic so the runner can resolve it", () => {
+    const machine = createMachine({
+      id: "m",
+      initial: "run",
+      states: {
+        run: {
+          invoke: { src: createAsyncLogic({ run: async () => 1 }), id: "w" },
+        },
+      },
+    });
+    const [effect] = byKind(
+      initialStep(machine, { isChild: false }).effects,
+      "runPromise",
+    ) as Extract<Effect, { kind: "runPromise" }>[];
+    expect(effect?.params).toEqual({
+      id: "w",
+      src: "xstate.invoke.0.m.run",
+      input: undefined,
+    });
   });
 
   it("emits startChild for a child-machine invoke (not runPromise)", () => {
@@ -241,6 +271,7 @@ describe("resumeStep() — events and routing", () => {
             KILL: (_, enq) => {
               enq.cancel("d");
             },
+            TICK: { target: "b" },
           },
         },
         b: { on: { AUTO: { target: "c" } } },
@@ -269,13 +300,47 @@ describe("resumeStep() — events and routing", () => {
   it("emits scheduleSend(self) for a delayed raise", () => {
     const scheduled = byKind(resume({ type: "LATER" }).effects, "scheduleSend");
     expect(scheduled).toHaveLength(1);
-    expect(scheduled[0]).toMatchObject({
+    expect(scheduled[0]).toEqual({
       kind: "scheduleSend",
-      sendId: "d",
-      target: { type: "self" },
-      event: { type: "TICK" },
+      sendId: timerId({ id: "d" }),
+      event: timerEvent({ id: "d" }),
       delay: 100,
     });
+  });
+
+  it("raises the delayed event when its timer fires", () => {
+    const m = machine();
+    const later = resume({ type: "LATER" });
+    const fired = resumeStep(m, {
+      stored: later.nextState,
+      event: timerEvent({ id: "d" }),
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(fired.nextState.value).toBe("b");
+    expect(fired.nextState.timers).toEqual([]);
+  });
+
+  it("ignores a timer delivery after the timer was cancelled", () => {
+    const m = machine();
+    const later = resume({ type: "LATER" });
+    const killed = resumeStep(m, {
+      stored: later.nextState,
+      event: { type: "KILL" },
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    const stale = resumeStep(m, {
+      stored: killed.nextState,
+      event: timerEvent({ id: "d" }),
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(stale.nextState.value).toBe("a");
+    expect(stale.effects).toEqual([]);
   });
 
   it("schedules an explicitly zero-delay raise instead of dropping it", () => {
@@ -299,9 +364,8 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(result.effects, "scheduleSend")).toEqual([
       {
         kind: "scheduleSend",
-        sendId: "zero",
-        target: { type: "self" },
-        event: { type: "TICK" },
+        sendId: timerId({ id: "zero" }),
+        event: timerEvent({ id: "zero" }),
         delay: 0,
       },
     ]);
@@ -324,9 +388,8 @@ describe("resumeStep() — events and routing", () => {
     ).toEqual([
       {
         kind: "scheduleSend",
-        sendId: "self-delay",
-        target: { type: "self" },
-        event: { type: "PING" },
+        sendId: timerId({ id: "self-delay" }),
+        event: timerEvent({ id: "self-delay" }),
         delay: 10,
       },
     ]);
@@ -334,8 +397,164 @@ describe("resumeStep() — events and routing", () => {
 
   it("emits cancel for cancel(id)", () => {
     expect(byKind(resume({ type: "KILL" }).effects, "cancel")).toEqual([
-      { kind: "cancel", sendId: "d" },
+      { kind: "cancel", sendId: timerId({ id: "d" }) },
     ]);
+  });
+
+  it("numbers unnamed delayed sends with a sequence that survives persistence", () => {
+    const unnamed = createMachine({
+      id: "unnamed",
+      on: {
+        LATER: (_, enq) => {
+          enq.raise({ type: "TICK" }, { delay: 10 });
+        },
+      },
+    });
+    const step = (stored: StoredState) =>
+      resumeStep(unnamed, {
+        stored: JSON.parse(JSON.stringify(stored)) as StoredState,
+        event: { type: "LATER" },
+        isChild: false,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+    const first = step(initialStep(unnamed, { isChild: false }).nextState);
+    const second = step(first.nextState);
+    expect(
+      [...first.effects, ...second.effects].map((effect) =>
+        effect.kind === "scheduleSend" ? effect.sendId : undefined,
+      ),
+    ).toEqual([timerId({ seq: 0 }), timerId({ seq: 1 })]);
+    expect(second.nextState.timers).toHaveLength(2);
+  });
+
+  it("takes an invoke's onTimeout when its timer fires after rehydration", () => {
+    const machine = setup({
+      actors: { work: createAsyncLogic({ run: async () => 1 }) },
+    }).createMachine({
+      id: "invoke-timeout",
+      initial: "run",
+      states: {
+        run: {
+          invoke: {
+            src: "work",
+            id: "w",
+            timeout: 100,
+            onTimeout: { target: "late" },
+          },
+        },
+        late: {},
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const [scheduled] = byKind(created.effects, "scheduleSend") as Extract<
+      Effect,
+      { kind: "scheduleSend" }
+    >[];
+    const fired = resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(created.nextState)) as StoredState,
+      event: scheduled!.event,
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: ["w"],
+    });
+    expect(fired.nextState.value).toBe("late");
+    expect(byKind(fired.effects, "stopPromise")).toEqual([
+      { kind: "stopPromise", actorId: "w" },
+    ]);
+  });
+
+  it("fires a delayed sendTo(self) as a send to self", () => {
+    // Like a live actor's mailbox, the event is delivered as a new external
+    // event rather than processed within the timer's macrostep.
+    const machine = createMachine({
+      id: "self-timer",
+      entry: ({ self }, enq) => {
+        enq.sendTo(self, { type: "PING" }, { delay: 10 });
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const [scheduled] = byKind(created.effects, "scheduleSend") as Extract<
+      Effect,
+      { kind: "scheduleSend" }
+    >[];
+    const fired = resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(created.nextState)) as StoredState,
+      event: scheduled!.event,
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(fired.effects).toEqual([
+      { kind: "send", target: { type: "self" }, event: { type: "PING" } },
+    ]);
+  });
+
+  it("fires a child's delayed sendTo(parent) to the parent", () => {
+    const machine = createMachine({
+      id: "kid",
+      entry: ({ parent }, enq) => {
+        enq.sendTo(parent, { type: "HI" }, { delay: 10, id: "p" });
+      },
+    });
+    const created = initialStep(machine, { isChild: true });
+    expect(created.nextState.timers?.[0]?.target).toEqual({ type: "parent" });
+    const fired = resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(created.nextState)) as StoredState,
+      event: timerEvent({ id: "p" }),
+      isChild: true,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(fired.effects).toEqual([
+      { kind: "send", target: { type: "parent" }, event: { type: "HI" } },
+    ]);
+  });
+
+  it("schedules an `after` timer by its event and cancels it on exit", () => {
+    const delayed = createMachine({
+      id: "after",
+      initial: "waiting",
+      states: {
+        waiting: {
+          after: { 1000: { target: "timedOut" } },
+          on: { LEAVE: { target: "left" } },
+        },
+        timedOut: {},
+        left: { on: { BACK: { target: "waiting" } } },
+      },
+    });
+    const key = {
+      event: { type: "xstate.after", delay: 1000, stateId: "after.waiting" },
+    };
+    const created = initialStep(delayed, { isChild: false });
+    expect(created.effects).toEqual([
+      {
+        kind: "scheduleSend",
+        sendId: timerId(key),
+        event: timerEvent(key),
+        delay: 1000,
+      },
+    ]);
+
+    const step = (stored: StoredState, event: { type: string }) =>
+      resumeStep(delayed, {
+        stored,
+        event,
+        isChild: false,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+    const left = step(created.nextState, { type: "LEAVE" });
+    expect(left.effects).toEqual([{ kind: "cancel", sendId: timerId(key) }]);
+
+    // Re-entering reschedules the same key; only the new timer fires.
+    const back = step(left.nextState, { type: "BACK" });
+    expect(byKind(back.effects, "scheduleSend")).toHaveLength(1);
+    expect(step(back.nextState, timerEvent(key)).nextState.value).toBe(
+      "timedOut",
+    );
+    expect(step(left.nextState, timerEvent(key)).nextState.value).toBe("left");
   });
 
   it("routes forwardTo(child) to a send effect targeting the child", () => {
@@ -370,7 +589,7 @@ describe("resumeStep() — events and routing", () => {
     ]);
   });
 
-  it("routes a delayed sendTo(child) to scheduleSend targeting the child", () => {
+  it("schedules a delayed sendTo(child) as a timer that sends to the child when fired", () => {
     const child = createMachine({
       id: "child",
       initial: "a",
@@ -396,10 +615,33 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(result.effects, "scheduleSend")).toEqual([
       {
         kind: "scheduleSend",
-        sendId: "s",
+        sendId: timerId({ id: "s" }),
+        event: timerEvent({ id: "s" }),
+        delay: 50,
+      },
+    ]);
+    expect(result.nextState.timers).toEqual([
+      {
+        id: "s",
+        delay: 50,
+        type: "@xstate.sendTo",
+        event: { type: "GO" },
+        target: { type: "child", childId: "kid" },
+      },
+    ]);
+
+    const fired = resumeStep(parent, {
+      stored: JSON.parse(JSON.stringify(result.nextState)) as StoredState,
+      event: timerEvent({ id: "s" }),
+      isChild: false,
+      knownChildIds: ["kid"],
+      knownPromiseIds: [],
+    });
+    expect(fired.effects).toEqual([
+      {
+        kind: "send",
         target: { type: "child", childId: "kid" },
         event: { type: "GO" },
-        delay: 50,
       },
     ]);
   });
@@ -618,7 +860,7 @@ describe("resumeStep() — events and routing", () => {
 
   it("stops a child from a serialized context ref", () => {
     // Restate journals the step as JSON, turning the live actor into XState's
-    // current `{ "xstate$type": "actorRef", id, ... }` marker. It must be
+    // `{ "$actor": "<address>" }` marker. It must be
     // canonicalized to the injected child stub before XState applies its
     // ownership check.
     const child = createMachine({
@@ -655,10 +897,246 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(stopped.effects, "stopChild")).toEqual([
       { kind: "stopChild", childId: "kid" },
     ]);
+    // The stub re-persists under the same address XState gave the live child.
     expect(JSON.parse(JSON.stringify(stopped.nextState)).context.ref).toEqual({
-      xstate$type: "actorRef",
-      id: "kid",
+      $actor: "parent/kid",
     });
+  });
+});
+
+describe("resumeStep() — actor refs held in context", () => {
+  // Restate persists context as JSON, so actor refs come back as XState's
+  // `{ $actor: <address> }` markers. Only a marker addressing one of this
+  // instance's own children may resolve to that child; any other ref (one
+  // received from another instance, such as a child's own child) must never be
+  // mistaken for a local child that happens to share its id.
+  const kid = createMachine({ id: "kid-logic" });
+  const holder = (id: string) =>
+    setup({ actors: { kid } }).createMachine({
+      id,
+      context: { ref: undefined as unknown },
+      initial: "running",
+      states: {
+        running: {
+          entry: (_, enq) => ({
+            context: { ref: enq.spawn("kid", { id: "kid" }) },
+          }),
+          on: {
+            ADOPT: ({ event }) => ({
+              context: { ref: (event as { ref?: unknown }).ref },
+            }),
+            KEEP_SELF: ({ self }) => ({ context: { ref: self } }),
+            POKE: ({ context }, enq) => {
+              enq.sendTo(context.ref as never, { type: "PING" });
+            },
+            STOP: ({ context }, enq) => {
+              enq.stop(context.ref as never);
+            },
+          },
+        },
+      },
+    });
+
+  const run = (
+    machine: ReturnType<typeof holder>,
+    isChild: boolean,
+    events: { type: string; ref?: unknown }[],
+  ) => {
+    let stored = initialStep(machine, { isChild }).nextState;
+    let result: ReturnType<typeof resumeStep> | undefined;
+    for (const event of events) {
+      result = resumeStep(machine, {
+        stored: JSON.parse(JSON.stringify(stored)) as StoredState,
+        event,
+        isChild,
+        knownChildIds: ["kid"],
+        knownPromiseIds: [],
+      });
+      stored = result.nextState;
+    }
+    return result!;
+  };
+
+  for (const isChild of [false, true]) {
+    const scope = isChild ? "child instance" : "root instance";
+
+    it(`routes a persisted ref to its own child (${scope})`, () => {
+      const result = run(holder("owner"), isChild, [{ type: "POKE" }]);
+      expect(result.effects).toEqual([
+        {
+          kind: "send",
+          target: { type: "child", childId: "kid" },
+          event: { type: "PING" },
+        },
+      ]);
+    });
+
+    it(`routes a persisted self ref to itself (${scope})`, () => {
+      const result = run(holder("owner"), isChild, [
+        { type: "KEEP_SELF" },
+        { type: "POKE" },
+      ]);
+      expect(result.effects).toEqual([
+        { kind: "send", target: { type: "self" }, event: { type: "PING" } },
+      ]);
+    });
+
+    it(`does not route a foreign ref to a same-named child (${scope})`, () => {
+      // A grandchild's ref, as a child instance would send it up.
+      const foreign = { $actor: "#_parent/other/kid" };
+      const result = run(holder("owner"), isChild, [
+        { type: "ADOPT", ref: foreign },
+        { type: "POKE" },
+      ]);
+      expect(byKind(result.effects, "send")).toEqual([]);
+    });
+
+    it(`treats stopping an already-stopped child again as a no-op (${scope})`, () => {
+      // As for a live actor: the stale ref still names this instance's own
+      // child, so XState accepts the stop, and there is nothing left to tear
+      // down. Throwing here would fail every retry of the event.
+      const machine = holder("owner");
+      const stopped = run(machine, isChild, [{ type: "STOP" }]);
+      expect(stopped.effects).toEqual([{ kind: "stopChild", childId: "kid" }]);
+      const again = resumeStep(machine, {
+        stored: JSON.parse(JSON.stringify(stopped.nextState)) as StoredState,
+        event: { type: "STOP" },
+        isChild,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+      expect(again.effects).toEqual([]);
+      // The stale ref keeps its address, and sends to it go nowhere.
+      expect(
+        JSON.parse(JSON.stringify(again.nextState)).context.ref.$actor,
+      ).toMatch(/\/kid$/);
+      const poke = resumeStep(machine, {
+        stored: JSON.parse(JSON.stringify(again.nextState)) as StoredState,
+        event: { type: "POKE" },
+        isChild,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+      expect(poke.effects).toEqual([]);
+    });
+
+    it(`does not stop a same-named child through a foreign ref (${scope})`, () => {
+      const foreign = { $actor: "elsewhere/kid" };
+      let stopped: Effect[] = [];
+      try {
+        stopped = run(holder("owner"), isChild, [
+          { type: "ADOPT", ref: foreign },
+          { type: "STOP" },
+        ]).effects;
+      } catch {
+        // XState refusing to stop an actor that is not its child is fine.
+      }
+      expect(byKind(stopped, "stopChild")).toEqual([]);
+    });
+  }
+});
+
+describe("resumeStep() — child lifecycle", () => {
+  const step = (
+    machine: Parameters<typeof resumeStep>[0],
+    stored: StoredState,
+    event: { type: string } & Record<string, unknown>,
+    knownChildIds: string[],
+  ) =>
+    resumeStep(machine, {
+      stored: JSON.parse(JSON.stringify(stored)) as StoredState,
+      event,
+      isChild: false,
+      knownChildIds,
+      knownPromiseIds: [],
+    });
+
+  it("respawns a finished child under the same id from its done handler", () => {
+    // XState frees a terminated child's id while its completion is handled
+    // (the supervisor pattern), so the respawn must start a fresh child.
+    const worker = createMachine({ id: "worker-logic" });
+    const machine = setup({ actors: { worker } }).createMachine({
+      id: "supervisor",
+      context: { restarts: 0 },
+      entry: (_, enq) => {
+        enq.spawn("worker", { id: "kid" });
+      },
+      on: {
+        "xstate.done.actor": ({ context }, enq) => {
+          enq.spawn("worker", { id: "kid" });
+          return { context: { restarts: context.restarts + 1 } };
+        },
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const done = step(
+      machine,
+      created.nextState,
+      { type: "xstate.done.actor", actorId: "kid", sessionId: "kid" },
+      ["kid"],
+    );
+    expect(done.nextState.context).toEqual({ restarts: 1 });
+    expect(done.effects).toEqual([
+      { kind: "stopChild", childId: "kid" },
+      {
+        kind: "startChild",
+        childId: "kid",
+        machineId: "worker-logic",
+        input: undefined,
+      },
+    ]);
+  });
+
+  it("delivers a send to a child before stopping it in the same step", () => {
+    // XState emits the send before the stop; the child must receive it.
+    const worker = createMachine({ id: "worker-logic" });
+    const machine = setup({ actors: { worker } }).createMachine({
+      id: "farewell",
+      entry: (_, enq) => {
+        enq.spawn("worker", { id: "kid" });
+      },
+      on: {
+        BYE: ({ children }, enq) => {
+          enq.sendTo(children.kid as never, { type: "BYE" });
+          enq.stop(children.kid as never);
+        },
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const bye = step(machine, created.nextState, { type: "BYE" }, ["kid"]);
+    expect(bye.effects).toEqual([
+      {
+        kind: "send",
+        target: { type: "child", childId: "kid" },
+        event: { type: "BYE" },
+      },
+      { kind: "stopChild", childId: "kid" },
+    ]);
+  });
+
+  it("stops a finished child once its completion is handled", () => {
+    // XState drops a terminated child from `children`; the durable child
+    // object must be torn down rather than leak.
+    const worker = createMachine({ id: "worker-logic" });
+    const machine = setup({ actors: { worker } }).createMachine({
+      id: "reaper",
+      initial: "running",
+      states: {
+        running: {
+          invoke: { src: "worker", id: "kid", onDone: { target: "after" } },
+        },
+        after: {},
+      },
+    });
+    const created = initialStep(machine, { isChild: false });
+    const done = step(
+      machine,
+      created.nextState,
+      { type: "xstate.done.actor", actorId: "kid", sessionId: "kid" },
+      ["kid"],
+    );
+    expect(done.nextState.value).toBe("after");
+    expect(done.effects).toEqual([{ kind: "stopChild", childId: "kid" }]);
   });
 });
 

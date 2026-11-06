@@ -268,7 +268,49 @@ describe("transient (eventless) transitions", () => {
       },
     });
     expect(() => initialStep(machine, { isChild: false })).toThrow(
-      /Microstep count exceeded/,
+      /Infinite loop detected .* more than 1000 microsteps/,
+    );
+  });
+
+  it("bounds a looping child machine started from its parent's step", () => {
+    // Spawning a child computes its initial snapshot inside the parent's step.
+    // Unbounded, that loop would exhaust memory there; bounded, XState keeps
+    // the failure inside the child, and the parent still starts the durable
+    // child (whose own initial step then fails and reports to the parent).
+    const broken = createMachine({
+      id: "broken-child",
+      initial: "a",
+      states: {
+        a: { always: { target: "b" } },
+        b: { always: { target: "a" } },
+      },
+    });
+    const parent = setup({ actors: { broken } }).createMachine({
+      id: "hopeful-parent",
+      invoke: { src: "broken", id: "kid" },
+    });
+    expect(initialStep(parent, { isChild: false }).effects).toEqual([
+      {
+        kind: "startChild",
+        childId: "kid",
+        machineId: "broken-child",
+        input: undefined,
+      },
+    ]);
+  });
+
+  it("respects a machine's own microstep bound", () => {
+    const machine = createMachine({
+      id: "loop",
+      options: { maxIterations: 5 },
+      initial: "a",
+      states: {
+        a: { always: { target: "b" } },
+        b: { always: { target: "a" } },
+      },
+    });
+    expect(() => initialStep(machine, { isChild: false })).toThrow(
+      /more than 5 microsteps/,
     );
   });
 });

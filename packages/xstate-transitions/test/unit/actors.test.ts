@@ -14,13 +14,14 @@ import {
   createAsyncLogic,
   createMachine,
   initialTransition,
-  isBuiltInExecutableAction,
+  isBuiltInExecutableEffect,
   setup,
 } from "xstate";
 import {
   createDoneActorEvent,
   createErrorActorEvent,
   normalizeError,
+  referenceInlineActor,
   resolveReferencedActor,
 } from "../../src/xstate/actors";
 
@@ -34,15 +35,42 @@ describe("resolveReferencedActor", () => {
     expect(resolveReferencedActor(machine, "work")).toBe(work);
   });
 
-  it("resolves a synthesized invoke src to the referenced machine", () => {
+  it("names inline invoke logic so it resolves back to the same logic", () => {
     const child = createMachine({ id: "child" });
     const parent = createMachine({ id: "parent", invoke: { src: child } });
     const [, actions] = initialTransition(parent);
     const spawn = actions.find(
-      (a) => isBuiltInExecutableAction(a) && a.type === "@xstate.spawn",
-    ) as { src: string };
-    expect(spawn.src).toMatch(/^xstate\.invoke\./);
-    expect(resolveReferencedActor(parent, spawn.src)).toBe(child);
+      (a) => isBuiltInExecutableEffect(a) && a.type === "@xstate.spawn",
+    ) as { src: unknown };
+    // XState reports inline logic as the object itself.
+    expect(spawn.src).toBe(child);
+    const name = referenceInlineActor(parent, spawn.src);
+    expect(name).toBe("xstate.invoke.0.parent");
+    expect(resolveReferencedActor(parent, name!)).toBe(child);
+  });
+
+  it("names inline invoke logic in nested states and invoke arrays", () => {
+    const first = createAsyncLogic({ run: async () => 1 });
+    const second = createAsyncLogic({ run: async () => 2 });
+    const machine = createMachine({
+      id: "m",
+      initial: "outer",
+      states: {
+        outer: {
+          initial: "inner",
+          states: { inner: { invoke: [{ src: first }, { src: second }] } },
+        },
+      },
+    });
+    expect(referenceInlineActor(machine, second)).toBe(
+      "xstate.invoke.1.m.outer.inner",
+    );
+    expect(
+      resolveReferencedActor(machine, "xstate.invoke.1.m.outer.inner"),
+    ).toBe(second);
+    expect(
+      referenceInlineActor(machine, createAsyncLogic({ run: async () => 3 })),
+    ).toBe(undefined);
   });
 });
 

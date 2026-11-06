@@ -10,12 +10,19 @@
  */
 
 import type {
+  AnyEventObject,
   AnyMachineSnapshot,
   AnyStateMachine,
   SnapshotFrom,
   SnapshotStatus,
 } from "xstate";
-import type { ReturnedSnapshot, StoredState } from "./types";
+import { PARENT_ID, parentRef } from "./scope";
+import type {
+  ReturnedSnapshot,
+  StoredState,
+  StoredTimer,
+  Target,
+} from "./types";
 
 // A raw xstate snapshot exposes more than we persist, and its `historyValue`
 // holds live StateNode instances. These local views describe just the fields we
@@ -28,6 +35,15 @@ interface RawSnapshot {
   error?: unknown;
   historyValue?: Record<string, { id: string }[]>;
   tags?: Set<string>;
+  timers?: readonly LiveTimer[];
+  _nextTimerId?: number;
+  _stateInputs?: Record<string, unknown>;
+  _nextActorIds?: Record<string, number>;
+}
+
+/** A pending timer as XState holds it on a live snapshot. */
+interface LiveTimer extends Omit<StoredTimer, "target"> {
+  target: "self" | { id?: string };
 }
 
 function asRaw(snapshot: AnyMachineSnapshot): RawSnapshot {
@@ -55,6 +71,55 @@ function deserializeHistory(
   return out;
 }
 
+function serializeTimerTarget(target: LiveTimer["target"]): Target {
+  if (target === "self") return { type: "self" };
+  if (target.id === PARENT_ID) return { type: "parent" };
+  // Any other target is a child ref. One that is no longer a live child when
+  // the timer fires is dropped by the interpreter's routing.
+  return { type: "child", childId: String(target.id) };
+}
+
+function deserializeTimerTarget(target: Target): LiveTimer["target"] {
+  switch (target.type) {
+    case "self":
+      return "self";
+    case "parent":
+      return parentRef as LiveTimer["target"];
+    case "child":
+      // Swapped for the canonical child stub when children are re-injected;
+      // a child no longer known stays a bare id that routing drops.
+      return { id: target.childId };
+  }
+}
+
+/**
+ * An invoke timeout event names the child's incarnation (`sessionId`), and
+ * XState only takes `onTimeout` when it matches the live child. That id is
+ * random and does not survive rehydration (children come back as stubs), so,
+ * like XState's own persistence, drop it: the timer is already cancelled when
+ * its invoke ends, so the actor id alone identifies it.
+ */
+function persistableTimerEvent(event: AnyEventObject): AnyEventObject {
+  if (event.type !== "xstate.timeout.actor" || !("sessionId" in event)) {
+    return event;
+  }
+  const { sessionId: _sessionId, ...rest } = event;
+  return rest as AnyEventObject;
+}
+
+function serializeTimers(
+  timers: readonly LiveTimer[] | undefined,
+): StoredTimer[] {
+  return (timers ?? []).map((timer): StoredTimer => ({
+    ...(timer.id === undefined ? {} : { id: timer.id }),
+    ...(timer.seq === undefined ? {} : { seq: timer.seq }),
+    delay: timer.delay,
+    type: timer.type,
+    event: persistableTimerEvent(timer.event),
+    target: serializeTimerTarget(timer.target),
+  }));
+}
+
 /** Serialize a live snapshot into the persisted form. */
 export function toStored(snapshot: AnyMachineSnapshot): StoredState {
   const raw = asRaw(snapshot);
@@ -65,6 +130,10 @@ export function toStored(snapshot: AnyMachineSnapshot): StoredState {
     output: raw.output,
     error: raw.error,
     historyValue: serializeHistory(raw.historyValue),
+    timers: serializeTimers(raw.timers),
+    nextTimerId: raw._nextTimerId ?? 0,
+    stateInputs: { ...raw._stateInputs },
+    nextActorIds: { ...raw._nextActorIds },
   };
 }
 
@@ -73,7 +142,7 @@ export function fromStored<M extends AnyStateMachine>(
   machine: M,
   stored: StoredState,
 ): SnapshotFrom<M> {
-  return machine.resolveState({
+  const snapshot = machine.resolveState({
     value: stored.value,
     context: stored.context,
     status: stored.status,
@@ -81,6 +150,19 @@ export function fromStored<M extends AnyStateMachine>(
     error: stored.error,
     historyValue: deserializeHistory(machine, stored.historyValue),
   } as never) as SnapshotFrom<M>;
+  // `resolveState` restores only the configuration and context. Restore the
+  // rest of what XState carries between transitions: pending timers and their
+  // sequence, the inputs active states were entered with, and the counters
+  // that keep generated child ids from being reused.
+  const raw = asRaw(snapshot);
+  raw.timers = (stored.timers ?? []).map((timer) => ({
+    ...timer,
+    target: deserializeTimerTarget(timer.target),
+  }));
+  raw._nextTimerId = stored.nextTimerId ?? 0;
+  raw._stateInputs = { ...stored.stateInputs };
+  raw._nextActorIds = { ...stored.nextActorIds };
+  return snapshot;
 }
 
 /** Project a live snapshot into the plain shape returned to callers. */

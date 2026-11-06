@@ -15,7 +15,7 @@ import {
   createAsyncLogic,
   createMachine,
   initialTransition,
-  isBuiltInExecutableAction,
+  isBuiltInExecutableEffect,
   setup,
   transition,
 } from "xstate";
@@ -23,6 +23,7 @@ import { runActor } from "../../src/restate/run-actor";
 import { createNormalizedErrorActorEvent } from "../../src/xstate/actors";
 import { buildRegistry } from "../../src/xstate/registry";
 import {
+  createTransitionScope,
   runInitial,
   runTransition,
   stubChildRef,
@@ -34,7 +35,7 @@ const jsonRoundTrip = <T>(value: T): T =>
 
 const builtIn = (actions: unknown[], type: string): any =>
   actions.find(
-    (a) => isBuiltInExecutableAction(a as any) && (a as any).type === type,
+    (a) => isBuiltInExecutableEffect(a as any) && (a as any).type === type,
   );
 
 describe("adversarial probes (v6 pure-transition shapes)", () => {
@@ -170,14 +171,15 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      child: stubChildRef("child"),
+      child: stubChildRef("child", createTransitionScope(parent, false).self),
     };
     const [, actions] = transition(parent, rehydrated, {
       type: "SEND",
     } as never);
     const send = builtIn(actions, "@xstate.sendTo");
-    // The serialized ref stays routable: its id resolves the child target.
-    expect(send.target?.id).toBe("child");
+    // XState passes the serialized ref through as an address marker; its last
+    // address segment names the child, which the interpreter routes by.
+    expect(send.target).toEqual({ $actor: "ref-parent/child" });
   });
 
   it("keeps sendTo(parent) and forwardTo resolvable with fabricated refs", () => {
@@ -197,14 +199,22 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
         },
       },
     });
-    const [, entryActions] = runInitial(child, undefined, true);
+    const [, entryActions] = runInitial(
+      child,
+      undefined,
+      createTransitionScope(child, true),
+    );
     expect(builtIn(entryActions, "@xstate.sendTo").target.id).toBe("#_parent");
-    const [childSnapshot] = runInitial(child, undefined, true);
+    const [childSnapshot] = runInitial(
+      child,
+      undefined,
+      createTransitionScope(child, true),
+    );
     const [, childActions] = runTransition(
       child,
       childSnapshot,
       { type: "GO" },
-      true,
+      createTransitionScope(child, true, childSnapshot),
     );
     expect(builtIn(childActions, "@xstate.sendTo").target.id).toBe("#_parent");
 
@@ -224,7 +234,7 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      child: stubChildRef("child"),
+      child: stubChildRef("child", createTransitionScope(parent, false).self),
     };
     const [, forwardActions] = transition(parent, rehydrated, {
       type: "FORWARD",
@@ -281,7 +291,10 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
     ) as any;
     rehydrated.children = {
       ...rehydrated.children,
-      [spawn.id]: stubChildRef(spawn.id),
+      [spawn.id]: stubChildRef(
+        spawn.id,
+        createTransitionScope(machine, false).self,
+      ),
     };
     const [next] = transition(machine, rehydrated, errorEvent as never);
     expect(next).toMatchObject({ status: "done", value: "matched" });

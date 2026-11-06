@@ -12,6 +12,7 @@
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
+  disposeChildren,
   executeEffects,
   maybeScheduleCleanup,
   rejectSubscriptions,
@@ -111,12 +112,45 @@ describe("executeEffects", () => {
       {
         key: "parent-key",
         method: "executeActor",
-        args: [{ params, executionId: "uuid-1" }],
+        args: [{ params, executionId: "uuid-1", machineId: null }],
       },
     ]);
     expect(harness.state.get("actorExecutions")).toEqual({
       work: "uuid-1",
     });
+  });
+
+  it("disposes every owned child machine", async () => {
+    const harness = createHarness();
+    harness.state.set("children", {
+      a: { key: "parent-key::a", machineId: "child" },
+      b: { key: "parent-key::b", machineId: "child" },
+    });
+
+    await disposeChildren(harness.context as never, harness.handler.self);
+
+    expect(harness.clientCalls).toEqual([
+      { key: "parent-key::a", method: "cleanupState", args: [] },
+      { key: "parent-key::b", method: "cleanupState", args: [] },
+    ]);
+  });
+
+  it("names the requesting instance's machine on the actor request", async () => {
+    // The runner resolves the actor against this machine, not whatever the
+    // object holds when the request runs (it may have been reset or disposed).
+    const harness = createHarness();
+    harness.state.set("machineId", "child-machine");
+    const params: SpawnParams = { id: "work", src: "work" };
+
+    await executeEffects(harness.handler, [{ kind: "runPromise", params }]);
+
+    expect(harness.clientCalls).toEqual([
+      {
+        key: "parent-key",
+        method: "executeActor",
+        args: [{ params, executionId: "uuid-1", machineId: "child-machine" }],
+      },
+    ]);
   });
 
   it("persists a child before routing later effects to it", async () => {
@@ -196,50 +230,7 @@ describe("executeEffects", () => {
       {
         key: "parent-key",
         method: "executeActor",
-        args: [{ params, executionId: "uuid-1" }],
-      },
-    ]);
-  });
-
-  it("generates collision-free ids for unnamed delayed sends", async () => {
-    const harness = createHarness();
-    const effects: Effect[] = ["FIRST", "SECOND"].map((type) => ({
-      kind: "scheduleSend",
-      target: { type: "self" },
-      event: { type },
-      delay: 0,
-    }));
-
-    await executeEffects(harness.handler, effects);
-
-    expect(harness.state.get("scheduled")).toEqual({
-      "uuid-1": {
-        uuid: "uuid-1",
-        targetKey: "parent-key",
-        event: { type: "FIRST" },
-      },
-      "uuid-2": {
-        uuid: "uuid-2",
-        targetKey: "parent-key",
-        event: { type: "SECOND" },
-      },
-    });
-    expect(
-      harness.clientCalls.map(({ key, method, args }) => ({
-        key,
-        method,
-        request: args[0],
-      })),
-    ).toEqual([
-      {
-        key: "parent-key",
-        method: "deliverScheduled",
-        request: { sendId: "uuid-1", uuid: "uuid-1" },
-      },
-      {
-        key: "parent-key",
-        method: "deliverScheduled",
-        request: { sendId: "uuid-2", uuid: "uuid-2" },
+        args: [{ params, executionId: "uuid-1", machineId: null }],
       },
     ]);
   });
@@ -251,7 +242,6 @@ describe("executeEffects", () => {
       {
         kind: "scheduleSend",
         sendId: "reminder",
-        target: { type: "self" },
         event: { type: "REMIND" },
         delay: 100,
       },
@@ -268,14 +258,12 @@ describe("executeEffects", () => {
       {
         kind: "scheduleSend",
         sendId: "slot",
-        target: { type: "self" },
         event: { type: "OLD" },
         delay: 100,
       },
       {
         kind: "scheduleSend",
         sendId: "slot",
-        target: { type: "self" },
         event: { type: "NEW" },
         delay: 50,
       },
@@ -284,7 +272,6 @@ describe("executeEffects", () => {
     expect(harness.state.get("scheduled")).toEqual({
       slot: {
         uuid: "uuid-2",
-        targetKey: "parent-key",
         event: { type: "NEW" },
       },
     });
@@ -307,7 +294,6 @@ describe("executeEffects", () => {
     harness.state.set("scheduled", {
       slot: {
         uuid: "old-token",
-        targetKey: "parent-key",
         event: { type: "OLD" },
       },
     });
@@ -317,7 +303,6 @@ describe("executeEffects", () => {
       {
         kind: "scheduleSend",
         sendId: "slot",
-        target: { type: "self" },
         event: { type: "NEW" },
         delay: 50,
       },
@@ -326,7 +311,6 @@ describe("executeEffects", () => {
     expect(harness.state.get("scheduled")).toEqual({
       slot: {
         uuid: "uuid-1",
-        targetKey: "parent-key",
         event: { type: "NEW" },
       },
     });

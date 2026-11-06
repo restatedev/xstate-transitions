@@ -19,6 +19,7 @@ import type {
 import {
   createDoneActorEvent,
   createNormalizedErrorActorEvent,
+  normalizeError,
 } from "../xstate/actors";
 import { evaluateCondition, isValidCondition } from "../xstate/conditions";
 import { initialStep, resumeStep } from "../xstate/interpret";
@@ -38,6 +39,7 @@ import {
   genericEventSchema,
 } from "./schemas";
 import {
+  disposeChildren,
   executeEffects,
   maybeScheduleCleanup,
   rejectSubscriptions,
@@ -439,8 +441,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     await validateNotDisposed(context);
     const stored = await getRequiredState(context);
     const machine = this.runtime.resolveMachine(await getMachineId(context));
-    const snapshot = fromStored(machine, stored);
-    return toReturnedSnapshot(snapshot);
+    return toReturnedSnapshot(restoreSnapshot(machine, stored));
   }
 
   async subscribe(
@@ -452,8 +453,7 @@ class MachineHandlers<M extends AnyStateMachine> {
     validateCondition(request.condition);
 
     const machine = this.runtime.resolveMachine(await getMachineId(context));
-    const snapshot = fromStored(machine, stored);
-    const returned = toReturnedSnapshot(snapshot);
+    const returned = toReturnedSnapshot(restoreSnapshot(machine, stored));
     const outcome = evaluateCondition(returned, request.condition);
 
     if (outcome.status === "resolve") {
@@ -582,24 +582,14 @@ class MachineHandlers<M extends AnyStateMachine> {
 
     delete scheduled[request.sendId];
     setScheduled(context, scheduled);
-
-    if (entry.targetKey === context.key) {
-      await applyEvent(this.runtime, context, entry.event);
-      return;
-    }
-
-    const sender = context.objectSendClient<MachineInternalVirtualObject>(
-      this.runtime.self,
-      entry.targetKey,
-    );
-    sender.deliverEvent(entry.event);
+    await applyEvent(this.runtime, context, entry.event);
   }
 
   async executeActor(
     context: restate.ObjectSharedContext,
     request: ExecuteRequest,
   ): Promise<void> {
-    const machine = this.runtime.resolveMachine(await getMachineId(context));
+    const machine = this.runtime.resolveMachine(request.machineId);
     const outcome = await runActor(machine, request.params, context);
     const sender = context.objectSendClient<MachineInternalVirtualObject>(
       this.runtime.self,
@@ -626,6 +616,7 @@ class MachineHandlers<M extends AnyStateMachine> {
       context,
       "State machine was disposed before the condition was met",
     );
+    await disposeChildren(context, this.runtime.self);
     markDisposedAndClear(context);
   }
 
@@ -638,6 +629,7 @@ class MachineHandlers<M extends AnyStateMachine> {
       context,
       "State machine was disposed before the condition was met",
     );
+    await disposeChildren(context, this.runtime.self);
     markDisposedAndClear(context);
   }
 }
@@ -670,17 +662,15 @@ async function initializeRoot<M extends AnyStateMachine>(
   context: restate.ObjectContext,
   input: InputFrom<M>,
 ): Promise<void> {
-  await rejectSubscriptions(
-    context,
-    "State machine was reset before the condition was met",
-  );
-  clearRuntimeState(context);
-  clearIdentity(context);
-
-  const handler = await loadHandlerContext(runtime, context);
+  // Compute first, so a failing initial transition has no side effects at all
+  // (such as rejecting the waiters of the instance it would have replaced).
   const result = await computeStep(context, "create", () =>
     initialStep(runtime.rootMachine, { input, isChild: false }),
   );
+  await resetInstance(runtime, context);
+  clearIdentity(context);
+
+  const handler = await loadHandlerContext(runtime, context);
   await commitStep(handler, result);
 }
 
@@ -690,22 +680,66 @@ async function initializeChild(
   context: restate.ObjectContext,
   request: InitRequest,
 ): Promise<void> {
+  const machine = runtime.resolveMachine(request.machineId);
+  // Compute first, as in `create`, so a failing initial transition has no
+  // side effects.
+  let result: Step;
+  try {
+    result = await computeStep(context, "initChild", () =>
+      initialStep(machine, {
+        input: request.input,
+        isChild: true,
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof restate.TerminalError)) throw error;
+    reportFailedStart(runtime, context, request, error);
+    return;
+  }
+  await resetInstance(runtime, context);
+  setIdentity(context, request);
+
+  const handler = await loadHandlerContext(runtime, context);
+  await commitStep(handler, result);
+}
+
+/**
+ * Clear the per-run state shared by `create` and `initChild` before a fresh
+ * instance starts: pending waiters are rejected and owned children disposed.
+ */
+async function resetInstance(
+  runtime: MachineRuntime,
+  context: restate.ObjectContext,
+): Promise<void> {
   await rejectSubscriptions(
     context,
     "State machine was reset before the condition was met",
   );
+  await disposeChildren(context, runtime.self);
   clearRuntimeState(context);
-  setIdentity(context, request);
+}
 
-  const machine = runtime.resolveMachine(request.machineId);
-  const handler = await loadHandlerContext(runtime, context);
-  const result = await computeStep(context, "initChild", () =>
-    initialStep(machine, {
-      input: request.input,
-      isChild: true,
-    }),
-  );
-  await commitStep(handler, result);
+/**
+ * Report a child whose initial transition failed as that child's error, so
+ * the parent takes `onError` instead of waiting for a completion that never
+ * comes.
+ */
+function reportFailedStart(
+  runtime: MachineRuntime,
+  context: restate.ObjectContext,
+  request: InitRequest,
+  error: restate.TerminalError,
+): void {
+  context
+    .objectSendClient<MachineInternalVirtualObject>(
+      runtime.self,
+      request.parentKey,
+    )
+    .actorError({
+      actorId: request.invokeId,
+      executionId: request.executionId,
+      error: normalizeError(error),
+    });
 }
 
 /** Apply one event to an existing instance; missing internal targets are no-ops. */
@@ -792,12 +826,63 @@ function computeEventStep(
 
 // Machine transitions may run synchronous user code such as assign actions.
 // Recording the Step keeps replay deterministic without constraining that code.
+//
+// A transition is pure, synchronous computation over persisted state, so an
+// error it throws (a throwing guard or action, an infinite eventless loop, an
+// XState rejection such as stopping an actor that is not a child) recurs on
+// every attempt. Retrying would block the object's queue forever, so the
+// failure is terminal: the invocation fails, nothing from the Step is
+// committed, and the instance stays usable for later events.
 function computeStep(
   context: restate.ObjectContext,
   label: string,
   compute: () => Step,
 ): Promise<Step> {
-  return context.run(label, compute);
+  return context.run(label, () => {
+    try {
+      return compute();
+    } catch (error) {
+      throw transitionFailure(label, error);
+    }
+  });
+}
+
+/** The terminal error reported for a transition that threw. */
+function transitionFailure(
+  label: string,
+  error: unknown,
+): restate.TerminalError {
+  if (error instanceof restate.TerminalError) return error;
+  return new restate.TerminalError(
+    `State machine transition failed (${label}): ${describeError(error)}`,
+    { errorCode: 500 },
+  );
+}
+
+/**
+ * Restore a persisted state outside a transition (for reads). A stored state
+ * that no longer fits the machine (e.g. a state removed in a later deploy)
+ * fails on every attempt, so it fails terminally instead of being retried.
+ */
+export function restoreSnapshot(
+  machine: AnyStateMachine,
+  stored: StoredState,
+): ReturnType<typeof fromStored> {
+  try {
+    return fromStored(machine, stored);
+  } catch (error) {
+    throw new restate.TerminalError(
+      `The stored state does not fit machine "${machine.id}": ${describeError(error)}`,
+      { errorCode: 500 },
+    );
+  }
+}
+
+/** `Name: message` for an Error, or the stringified value. */
+function describeError(error: unknown): string {
+  return error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : String(error);
 }
 
 async function commitStep(

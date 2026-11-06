@@ -6,7 +6,7 @@ implementation, durability model, and testing strategy.
 
 > [!IMPORTANT]
 > The integration depends on XState internals and targets XState v6
-> `6.0.0-alpha.48`. Treat an XState upgrade as an integration change that
+> `6.0.0-beta.1`. Treat an XState upgrade as an integration change that
 > requires the full normal and forced-replay test suites.
 
 ## Contents
@@ -410,6 +410,12 @@ to explicit JSON-safe representations first. Actor references created by
 supported `spawn` patterns are reconstructed only for routing; they are not
 general serializable application data.
 
+Only two kinds of actor reference stay routable after they are persisted in
+context: a reference to one of the instance's own children, and its own
+`self`. A reference received from another instance (for example a child
+passing up a reference to its own child) is never routed: a `sendTo` to it is
+dropped, even if its id matches a local child's.
+
 Runtime ingress schemas do not enforce this invariant: they validate public
 input/events, while later transitions and actor outputs can still put an
 unserializable value into context. Keep context types JSON-shaped and test
@@ -575,16 +581,32 @@ const machine = setup({
 });
 ```
 
-Cancellation removes the durable token for that ID. Restate may still deliver
-the already queued internal call, but the integration compares its unique token
-and turns a cancelled or superseded delivery into a no-op.
+XState keeps every pending timer in the machine snapshot, which the integration
+persists. Cancelling (or leaving the state of an `after` transition) removes the
+timer from the snapshot and the durable token for its delivery. Restate may
+still deliver the already queued internal call, but the integration ignores a
+superseded token, and XState ignores a timer that is no longer pending.
 
 Useful details:
 
 - an explicit delay of `0` is still scheduled;
 - immediate `raise` is drained inside the current macrostep;
-- delayed actions without an explicit ID receive a generated unique ID; and
+- delayed actions without an explicit ID are numbered by XState's persisted
+  timer sequence, so they never collide; and
 - use an explicit ID when you need to cancel or replace a particular delivery.
+
+A cycle of eventless transitions or raised events fails the invocation with an
+`InfiniteTransitionError` after 1000 microsteps. Set
+`createMachine({ options: { maxIterations } })` to choose a different bound.
+
+A transition that throws (a throwing guard or action, an infinite loop, or an
+XState rejection such as stopping an actor that is not a child) fails the
+invocation with a terminal error instead of being retried, because the same
+computation would fail on every retry. Nothing from that step is committed and
+the instance keeps accepting events. When the failing event was a delayed event
+or an actor result, that delivery is consumed and not redelivered. XState
+itself turns some failures, such as a throwing context factory, into an `error`
+snapshot rather than a thrown error; those are committed like any other state.
 
 To model a recurring timer, have the delivered event schedule its next delayed
 self-event. Do not use `setInterval` or a callback actor.
@@ -983,8 +1005,7 @@ type Effect =
   | { kind: "send"; target: Target; event: AnyEventObject }
   | {
       kind: "scheduleSend";
-      sendId?: string;
-      target: Target;
+      sendId: string;
       event: AnyEventObject;
       delay: number;
     }
@@ -1000,6 +1021,14 @@ transition, the core reinjects inert stubs for known persisted child and promise
 actor IDs. This prevents active actors from being restarted and lets `sendTo`
 and `forwardTo` resolve child targets without trying to revive an in-memory
 actor.
+
+References persisted in context come back as XState's `{ $actor: address }`
+markers. A marker is replaced with a child's stub only when its address is
+exactly that child's address under this instance (`<machine id>/<child id>`
+for a root, `#_parent/<machine id>/<child id>` for a child instance), and
+routes to `self` when it is the instance's own address. Matching on the full
+address, not the trailing id, keeps a reference from another instance from
+being mistaken for, and sent to or stopped as, a same-named local child.
 
 ## Handler and commit lifecycle
 
@@ -1072,6 +1101,10 @@ interface StoredState {
   output?: unknown;
   error?: unknown;
   historyValue: Record<string, string[]>;
+  timers?: StoredTimer[];
+  nextTimerId?: number;
+  stateInputs?: Record<string, unknown>;
+  nextActorIds?: Record<string, number>;
 }
 ```
 
@@ -1080,6 +1113,18 @@ objects. `toStored` converts each node to its stable state-node ID;
 `fromStored` looks those IDs up through `machine.getStateNodeById` before calling
 `machine.resolveState`. This preserves shallow and deep history through JSON
 serialization and process loss.
+
+`resolveState` rebuilds only the configuration and context, so `fromStored`
+restores the rest of what XState carries between transitions:
+
+- `timers` and `nextTimerId`: pending delays and the sequence that numbers
+  unnamed ones (see [Delayed delivery and cancellation](#delayed-delivery-and-cancellation)).
+  A timer's target actor is stored as a routing `Target` and restored as the
+  same stub ref the scope uses.
+- `stateInputs`: the `input` each active state was entered with, which later
+  transitions, exit actions, and final output read.
+- `nextActorIds`: the per-source counters for generated child ids (`child:0`),
+  so an id freed by a stopped child is never reissued to a new one.
 
 `ReturnedSnapshot` is a separate boundary type. It adds sorted tags but omits
 internal history and live XState structures.
@@ -1190,17 +1235,28 @@ A delayed send cannot be physically withdrawn from Restate's queue. The
 integration therefore uses logical cancellation:
 
 ```text
-scheduled[sendId] = { uuid, targetKey, event }
+scheduled[sendId] = { uuid, event }
 ```
+
+Every delayed effect (`after`, state/actor timeouts, delayed `raise` and
+`sendTo`) is a pending timer in XState's snapshot, identified by a timer key: its
+explicit ID, else the sequence number XState assigns to an unnamed delay, else
+its built-in timer event (such as `xstate.after` with its `stateId` and
+`delay`). The `sendId` is that key in string form, and the scheduled event is an
+`xstate.timer` event carrying the key, which is always delivered back to the
+instance that scheduled it.
 
 It schedules an internal `deliverScheduled({ sendId, uuid })` call. On delivery,
 the handler reloads the record and proceeds only if both IDs still match. It
-deletes the record before routing the event.
+deletes the record and applies the `xstate.timer` event. XState then removes the
+timer and either raises its event or emits an immediate `sendTo`, which is
+routed like any other send. A timer to a child that has since stopped is
+dropped at that point.
 
-`cancel(sendId)` deletes the record. Scheduling a new event under the same
-explicit ID replaces its UUID, making older deliveries stale. For unnamed
-delayed sends, `ctx.rand.uuidv4()` supplies both a collision-free key and a
-delivery token.
+`cancel(sendId)` deletes the record. Scheduling a timer under the same key
+replaces its UUID, making older deliveries stale. Even a delivery that slips
+past the token check is harmless: XState ignores an `xstate.timer` event whose
+timer is no longer pending.
 
 This pattern makes cancellation deterministic without requiring an unsupported
 queue-removal primitive.
@@ -1253,7 +1309,7 @@ fresh execution, test probes, migrations, and version upgrades.
 The parent-aware inert XState scope and action decoding currently depend on
 XState internal shapes. In particular, the integration recognizes XState's
 internal action type strings and fabricates inert actor references for routing.
-That is why XState is pinned to `6.0.0-alpha.48` and each new prerelease is
+That is why XState is pinned to `6.0.0-beta.1` and each new prerelease is
 validated before the lockfile advances.
 
 For an XState upgrade:

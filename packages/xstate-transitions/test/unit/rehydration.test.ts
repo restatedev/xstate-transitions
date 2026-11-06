@@ -141,4 +141,83 @@ describe("rehydration", () => {
     };
     expect(() => fromStored(machine, corrupted)).toThrow();
   });
+
+  it("keeps a state's input across rehydration", () => {
+    // A transition can hand `input` to the state it enters; later transitions
+    // out of that state read it. It must survive the JSON round trip between
+    // requests, or every later event would see `undefined`.
+    const machine = createMachine({
+      id: "inputs",
+      context: { seen: undefined as unknown },
+      initial: "idle",
+      states: {
+        idle: { on: { GO: { target: "active", input: { n: 42 } } } },
+        active: {
+          on: {
+            READ: ({ input }) => ({
+              context: { seen: (input as { n?: number } | undefined)?.n },
+            }),
+          },
+        },
+      },
+    });
+    const step = (stored: StoredState, type: string) =>
+      resumeStep(machine, {
+        stored: roundTrip(stored),
+        event: { type },
+        isChild: false,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+    const created = initialStep(machine, { isChild: false });
+    const active = step(created.nextState, "GO");
+    expect(step(active.nextState, "READ").nextState.context).toEqual({
+      seen: 42,
+    });
+  });
+
+  it("never reissues a generated child id after that child stops", () => {
+    // XState numbers anonymous children per source and never hands a freed id
+    // out again, so a late message from a stopped child cannot be mistaken for
+    // its successor. The counters must survive rehydration for that to hold.
+    const child = createMachine({ id: "child" });
+    const machine = createMachine({
+      id: "spawner",
+      context: { ref: undefined as unknown },
+      on: {
+        SPAWN: (_, enq) => ({ context: { ref: enq.spawn(child) } }),
+        STOP: ({ context }, enq) => {
+          enq.stop(context.ref as never);
+          return { context: { ref: undefined } };
+        },
+      },
+    });
+    let knownChildIds: string[] = [];
+    const step = (stored: StoredState, type: string) => {
+      const result = resumeStep(machine, {
+        stored: roundTrip(stored),
+        event: { type },
+        isChild: false,
+        knownChildIds,
+        knownPromiseIds: [],
+      });
+      for (const effect of result.effects) {
+        if (effect.kind === "startChild") knownChildIds.push(effect.childId);
+        if (effect.kind === "stopChild") {
+          knownChildIds = knownChildIds.filter((id) => id !== effect.childId);
+        }
+      }
+      return result;
+    };
+    const created = initialStep(machine, { isChild: false });
+    const first = step(created.nextState, "SPAWN");
+    const stopped = step(first.nextState, "STOP");
+    const second = step(stopped.nextState, "SPAWN");
+    const started = (result: { effects: Effect[] }) =>
+      byKind(result.effects, "startChild").map(
+        (effect) => (effect as Extract<Effect, { kind: "startChild" }>).childId,
+      );
+    expect(started(first)).toEqual(["child:0"]);
+    expect(started(second)).toEqual(["child:1"]);
+  });
 });

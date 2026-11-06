@@ -26,4 +26,10 @@ export type {
   StandardSchemaResult,
   WaitForRequest,
 } from "./restate/types";
-export type { Condition, ReturnedSnapshot, StoredState } from "./xstate/types";
+export type {
+  Condition,
+  ReturnedSnapshot,
+  StoredState,
+  StoredTimer,
+  Target,
+} from "./xstate/types";

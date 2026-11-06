@@ -21,6 +21,7 @@ import type {
 import {
   getActorExecutions,
   getChildren,
+  getMachineId,
   getScheduled,
   getSubscriptions,
   markReported,
@@ -78,9 +79,13 @@ export async function executeEffects(
           self,
           ctx.key,
         );
+        // The machine travels with the request: the runner must resolve the
+        // actor against this instance's machine even if the instance has been
+        // reset or disposed (clearing its persisted machine id) by then.
         sender.executeActor({
           params: effect.params,
           executionId,
+          machineId: await getMachineId(ctx),
         });
         break;
       }
@@ -138,15 +143,9 @@ export async function executeEffects(
         break;
       }
       case "scheduleSend": {
-        const key = resolveTarget(handler, effect.target, children);
-        if (key === undefined) break;
         const uuid = ctx.rand.uuidv4();
-        const sendId = effect.sendId ?? uuid;
-        scheduled[sendId] = {
-          uuid,
-          targetKey: key,
-          event: effect.event,
-        };
+        const { sendId } = effect;
+        scheduled[sendId] = { uuid, event: effect.event };
         scheduledChanged = true;
         const sender = ctx.objectSendClient<MachineInternalVirtualObject>(
           self,
@@ -219,6 +218,24 @@ export async function rejectSubscriptions(
     }
   }
   setSubscriptions(ctx, {});
+}
+
+/**
+ * Dispose every child machine this instance still owns. Called before an
+ * instance forgets its children (reset by `create`/`initChild`, or disposal),
+ * so children (and, through their own disposal, grandchildren) never keep
+ * running unowned.
+ */
+export async function disposeChildren(
+  ctx: HandlerContext["ctx"],
+  self: HandlerContext["self"],
+): Promise<void> {
+  const children = await getChildren(ctx);
+  for (const child of Object.values(children)) {
+    ctx
+      .objectSendClient<MachineInternalVirtualObject>(self, child.key)
+      .cleanupState();
+  }
 }
 
 /** If this is a child instance, report its terminal state back to the parent. */
