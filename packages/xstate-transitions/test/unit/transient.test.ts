@@ -268,7 +268,22 @@ describe("transient (eventless) transitions", () => {
       },
     });
     expect(() => initialStep(machine, { isChild: false })).toThrow(
-      /Microstep count exceeded/,
+      /Infinite loop detected .* more than 1000 microsteps/,
+    );
+  });
+
+  it("respects a machine's own microstep bound", () => {
+    const machine = createMachine({
+      id: "loop",
+      options: { maxIterations: 5 },
+      initial: "a",
+      states: {
+        a: { always: { target: "b" } },
+        b: { always: { target: "a" } },
+      },
+    });
+    expect(() => initialStep(machine, { isChild: false })).toThrow(
+      /more than 5 microsteps/,
     );
   });
 });

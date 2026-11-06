@@ -9,11 +9,7 @@
  * https://github.com/restatedev/sdk-typescript/blob/main/LICENSE
  */
 
-import type {
-  AnyEventObject,
-  ExecutableActionObject,
-  SnapshotStatus,
-} from "xstate";
+import type { AnyEventObject, ExecutableEffect, SnapshotStatus } from "xstate";
 
 // ---------------------------------------------------------------------------
 // Shared types for the pure (Restate-free) layer. Kept in one self-contained
@@ -33,6 +29,24 @@ export interface StoredState {
   output?: unknown;
   error?: unknown;
   historyValue: Record<string, string[]>;
+  /** XState's pending logical timers (delayed raise/sendTo, `after`, timeouts). */
+  timers?: StoredTimer[];
+  /** XState's sequence for numbering delayed sends scheduled without an `id`. */
+  nextTimerId?: number;
+}
+
+/**
+ * A pending XState timer in serializable form. The live snapshot holds actor
+ * refs as targets; these are persisted as routing descriptors and resolved
+ * back to stub refs on rehydration.
+ */
+export interface StoredTimer {
+  id?: string;
+  seq?: number;
+  delay: number;
+  type: "@xstate.raise" | "@xstate.sendTo";
+  event: AnyEventObject;
+  target: Target;
 }
 
 /** The plain, serializable snapshot shape returned to callers. */
@@ -55,12 +69,12 @@ export type ConditionOutcome =
   | { status: "reject"; reason: string };
 
 /**
- * One executable action emitted by xstate's pure transition (the v6 effect
- * model). The interpreter narrows the built-in members (`@xstate.spawn`,
- * `@xstate.sendTo`, `@xstate.raise`, `@xstate.cancel`, `@xstate.stop`) with
- * xstate's `isBuiltInExecutableAction` and reads their stable named fields.
+ * One executable effect emitted by xstate's pure transition. The interpreter
+ * narrows the built-in members (`@xstate.spawn`, `@xstate.sendTo`,
+ * `@xstate.raise`, `@xstate.cancel`, `@xstate.stop`) with xstate's
+ * `isBuiltInExecutableEffect` and reads their stable named fields.
  */
-export type Action = ExecutableActionObject;
+export type Action = ExecutableEffect;
 
 /** Where a routed event is delivered. */
 export type Target =
@@ -85,9 +99,14 @@ export type Effect =
   | { kind: "stopPromise"; actorId: string }
   | { kind: "send"; target: Target; event: AnyEventObject }
   | {
+      /**
+       * Deliver `event` (an `xstate.timer` event) back to this instance after
+       * `delay`. XState owns the pending timer in its snapshot and decides on
+       * delivery whether it still fires; `sendId` is the timer's stable key, so
+       * rescheduling or cancelling the same timer supersedes this delivery.
+       */
       kind: "scheduleSend";
-      /** Explicit XState id, if supplied. The effect runner generates one otherwise. */
-      sendId?: string;
+      sendId: string;
       target: Target;
       event: AnyEventObject;
       delay: number;

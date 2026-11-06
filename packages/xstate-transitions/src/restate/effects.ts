@@ -141,7 +141,7 @@ export async function executeEffects(
         const key = resolveTarget(handler, effect.target, children);
         if (key === undefined) break;
         const uuid = ctx.rand.uuidv4();
-        const sendId = effect.sendId ?? uuid;
+        const { sendId } = effect;
         scheduled[sendId] = {
           uuid,
           targetKey: key,

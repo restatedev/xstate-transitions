@@ -15,7 +15,13 @@ import type {
   SnapshotFrom,
   SnapshotStatus,
 } from "xstate";
-import type { ReturnedSnapshot, StoredState } from "./types";
+import { PARENT_ID, parentRef, stubChildRef } from "./scope";
+import type {
+  ReturnedSnapshot,
+  StoredState,
+  StoredTimer,
+  Target,
+} from "./types";
 
 // A raw xstate snapshot exposes more than we persist, and its `historyValue`
 // holds live StateNode instances. These local views describe just the fields we
@@ -28,6 +34,13 @@ interface RawSnapshot {
   error?: unknown;
   historyValue?: Record<string, { id: string }[]>;
   tags?: Set<string>;
+  timers?: readonly LiveTimer[];
+  _nextTimerId?: number;
+}
+
+/** A pending timer as XState holds it on a live snapshot. */
+interface LiveTimer extends Omit<StoredTimer, "target"> {
+  target: "self" | { id?: string };
 }
 
 function asRaw(snapshot: AnyMachineSnapshot): RawSnapshot {
@@ -55,6 +68,37 @@ function deserializeHistory(
   return out;
 }
 
+function serializeTimerTarget(target: LiveTimer["target"]): Target {
+  if (target === "self") return { type: "self" };
+  if (target.id === PARENT_ID) return { type: "parent" };
+  // Any other target is a child ref. One that is no longer a live child when
+  // the timer fires is dropped by the interpreter's routing.
+  return { type: "child", childId: String(target.id) };
+}
+
+function deserializeTimerTarget(target: Target): LiveTimer["target"] {
+  switch (target.type) {
+    case "self":
+      return "self";
+    case "parent":
+      return parentRef as LiveTimer["target"];
+    case "child":
+      // Swapped for the canonical child stub when children are re-injected.
+      return stubChildRef(target.childId) as LiveTimer["target"];
+  }
+}
+
+function serializeTimers(timers: readonly LiveTimer[] | undefined) {
+  return (timers ?? []).map((timer): StoredTimer => ({
+    ...(timer.id === undefined ? {} : { id: timer.id }),
+    ...(timer.seq === undefined ? {} : { seq: timer.seq }),
+    delay: timer.delay,
+    type: timer.type,
+    event: timer.event,
+    target: serializeTimerTarget(timer.target),
+  }));
+}
+
 /** Serialize a live snapshot into the persisted form. */
 export function toStored(snapshot: AnyMachineSnapshot): StoredState {
   const raw = asRaw(snapshot);
@@ -65,6 +109,8 @@ export function toStored(snapshot: AnyMachineSnapshot): StoredState {
     output: raw.output,
     error: raw.error,
     historyValue: serializeHistory(raw.historyValue),
+    timers: serializeTimers(raw.timers),
+    nextTimerId: raw._nextTimerId ?? 0,
   };
 }
 
@@ -73,7 +119,7 @@ export function fromStored<M extends AnyStateMachine>(
   machine: M,
   stored: StoredState,
 ): SnapshotFrom<M> {
-  return machine.resolveState({
+  const snapshot = machine.resolveState({
     value: stored.value,
     context: stored.context,
     status: stored.status,
@@ -81,6 +127,15 @@ export function fromStored<M extends AnyStateMachine>(
     error: stored.error,
     historyValue: deserializeHistory(machine, stored.historyValue),
   } as never) as SnapshotFrom<M>;
+  // `resolveState` starts with no pending timers. XState fires and cancels
+  // timers against this list, so restore it along with the timer sequence.
+  const raw = snapshot as unknown as RawSnapshot;
+  raw.timers = (stored.timers ?? []).map((timer) => ({
+    ...timer,
+    target: deserializeTimerTarget(timer.target),
+  }));
+  raw._nextTimerId = stored.nextTimerId ?? 0;
+  return snapshot;
 }
 
 /** Project a live snapshot into the plain shape returned to callers. */

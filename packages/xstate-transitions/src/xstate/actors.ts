@@ -44,6 +44,40 @@ export function resolveReferencedActor(
   return (entry as { src?: unknown } | undefined)?.src;
 }
 
+/** The parts of a state node we walk to find an inline invoke's logic. */
+interface InvokingNode {
+  id: string;
+  config: { invoke?: unknown };
+  states: Record<string, InvokingNode>;
+}
+
+/**
+ * The inverse of {@link resolveReferencedActor} for inline invoke logic. XState
+ * reports an inline invoke's `src` as the logic object itself, which cannot
+ * cross a Restate call; this names it by its invoke definition
+ * (`xstate.invoke.<index>.<nodeId>`) so the actor runner can resolve it again.
+ * Returns `undefined` when the logic is not an inline invoke of `machine`.
+ */
+export function referenceInlineActor(
+  machine: AnyStateMachine,
+  logic: unknown,
+): string | undefined {
+  const visit = (node: InvokingNode): string | undefined => {
+    const invoke = node.config.invoke;
+    const entries = invoke === undefined ? [] : [invoke].flat();
+    const index = entries.findIndex(
+      (entry) => (entry as { src?: unknown } | undefined)?.src === logic,
+    );
+    if (index !== -1) return `xstate.invoke.${index}.${node.id}`;
+    for (const child of Object.values(node.states)) {
+      const found = visit(child);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  return visit(machine.root as unknown as InvokingNode);
+}
+
 export function createDoneActorEvent(
   invokeId: string,
   output?: unknown,

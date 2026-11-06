@@ -82,7 +82,8 @@ const internalsOf = (machine: AnyStateMachine): MachineInternals =>
 // communication-error event instead of a routable action. Giving the throwaway
 // actor a fake `_parent` makes XState resolve those into ordinary
 // `@xstate.sendTo` actions whose `target.id` is #_parent, which the integration
-// routes to the parent object. Its identity is otherwise unused.
+// routes to the parent object. It is also the restored target of a pending
+// timer that sends to the parent.
 const FAKE_PARENT = {
   id: PARENT_ID,
   sessionId: PARENT_ID,
@@ -95,13 +96,16 @@ const FAKE_PARENT = {
   stop: () => {},
 };
 
+/** The stand-in parent ref, for restoring timers that target the parent. */
+export const parentRef: unknown = FAKE_PARENT;
+
 /**
  * A minimal stand-in for a child actor ref. `resolveState` drops live children,
  * so before transitioning we re-inject one of these per persisted child so that
  * `sendTo`/`forwardTo` targeting the child resolves to a routable action instead
- * of a communication error. Alpha.48 also reads its active status and `ref`
- * identity during child ownership checks. `toJSON` preserves XState's actor-ref
- * marker when Restate persists the planned snapshot. The stub itself is never
+ * of a communication error. XState also reads its active status and `ref`
+ * identity during child ownership checks. `toJSON` emits XState's actor-ref
+ * marker (`{ $actor }`) when Restate persists the planned snapshot. The stub itself is never
  * run.
  */
 export function stubChildRef(id: string): unknown {
@@ -114,7 +118,7 @@ export function stubChildRef(id: string): unknown {
     on: () => ({ unsubscribe: () => {} }),
     _parent: undefined,
     _processingStatus: 1,
-    toJSON: () => ({ xstate$type: "actorRef", id }),
+    toJSON: () => ({ $actor: id }),
     ref: undefined as unknown,
   };
   ref.ref = ref;
@@ -139,7 +143,7 @@ function parentScope(
       self.system._unregister?.(actor);
     }
   }
-  // Alpha.48 consults `self._snapshot` for child ownership and id allocation.
+  // XState consults `self._snapshot` for child ownership and id allocation.
   // Drop createActor's eagerly computed initial snapshot for an initial step,
   // or replace it with the rehydrated snapshot for a resumed child step.
   self._snapshot = snapshot;
@@ -158,6 +162,24 @@ function parentScope(
 }
 
 /**
+ * The microstep bound applied to machines that do not set their own
+ * `options.maxIterations`. XState v6 leaves macrosteps unbounded by default, so
+ * a cycle of eventless transitions or raised events would spin until the
+ * handler runs out of memory; bounding it surfaces an `InfiniteTransitionError`
+ * that fails the invocation instead.
+ */
+export const DEFAULT_MAX_ITERATIONS = 1000;
+
+/** Bound the machine's macrosteps unless it chose its own bound. */
+function guardInfiniteLoops(machine: AnyStateMachine): void {
+  // `options` is the machine's own copy of its config options.
+  const options = (machine as { options?: { maxIterations?: number } }).options;
+  if (options !== undefined) {
+    options.maxIterations ??= DEFAULT_MAX_ITERATIONS;
+  }
+}
+
+/**
  * Compute the initial transition. For a child machine, uses a parent-aware scope
  * so entry `sendTo(parent, …)` actions resolve; for a root, uses xstate's
  * built-in `initialTransition`.
@@ -167,6 +189,7 @@ export function runInitial(
   input: unknown,
   asChild: boolean,
 ): [AnyMachineSnapshot, Action[]] {
+  guardInfiniteLoops(machine);
   if (!asChild) {
     return initialTransition(machine, input) as [AnyMachineSnapshot, Action[]];
   }
@@ -183,6 +206,7 @@ export function runTransition(
   event: unknown,
   asChild: boolean,
 ): [AnyMachineSnapshot, Action[]] {
+  guardInfiniteLoops(machine);
   if (!asChild) {
     return transition(machine, snapshot, event as never) as [
       AnyMachineSnapshot,

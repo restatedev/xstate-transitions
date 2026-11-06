@@ -25,6 +25,15 @@ import type { Effect, StoredState } from "../../src/xstate/types";
 const byKind = (effects: Effect[], kind: Effect["kind"]) =>
   effects.filter((effect) => effect.kind === kind);
 
+/** The durable send id the interpreter derives from an XState timer key. */
+const timerId = (key: { id: string } | { seq: number } | { event: object }) =>
+  JSON.stringify(Object.entries(key)[0]);
+
+/** The `xstate.timer` event that fires a pending XState timer. */
+const timerEvent = (
+  key: { id: string } | { seq: number } | { event: object },
+) => ({ type: "xstate.timer", ...key });
+
 describe("initialStep()", () => {
   it("bakes an entry context patch into context and emits no effect for it", () => {
     const machine = createMachine({
@@ -53,6 +62,27 @@ describe("initialStep()", () => {
       (promises[0] as Extract<Effect, { kind: "runPromise" }>).params.id,
     ).toBe("w");
     expect(byKind(result.effects, "startChild")).toHaveLength(0);
+  });
+
+  it("names inline promise logic so the runner can resolve it", () => {
+    const machine = createMachine({
+      id: "m",
+      initial: "run",
+      states: {
+        run: {
+          invoke: { src: createAsyncLogic({ run: async () => 1 }), id: "w" },
+        },
+      },
+    });
+    const [effect] = byKind(
+      initialStep(machine, { isChild: false }).effects,
+      "runPromise",
+    ) as Extract<Effect, { kind: "runPromise" }>[];
+    expect(effect?.params).toEqual({
+      id: "w",
+      src: "xstate.invoke.0.m.run",
+      input: undefined,
+    });
   });
 
   it("emits startChild for a child-machine invoke (not runPromise)", () => {
@@ -241,6 +271,7 @@ describe("resumeStep() — events and routing", () => {
             KILL: (_, enq) => {
               enq.cancel("d");
             },
+            TICK: { target: "b" },
           },
         },
         b: { on: { AUTO: { target: "c" } } },
@@ -269,13 +300,48 @@ describe("resumeStep() — events and routing", () => {
   it("emits scheduleSend(self) for a delayed raise", () => {
     const scheduled = byKind(resume({ type: "LATER" }).effects, "scheduleSend");
     expect(scheduled).toHaveLength(1);
-    expect(scheduled[0]).toMatchObject({
+    expect(scheduled[0]).toEqual({
       kind: "scheduleSend",
-      sendId: "d",
+      sendId: timerId({ id: "d" }),
       target: { type: "self" },
-      event: { type: "TICK" },
+      event: timerEvent({ id: "d" }),
       delay: 100,
     });
+  });
+
+  it("raises the delayed event when its timer fires", () => {
+    const m = machine();
+    const later = resume({ type: "LATER" });
+    const fired = resumeStep(m, {
+      stored: later.nextState,
+      event: timerEvent({ id: "d" }),
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(fired.nextState.value).toBe("b");
+    expect(fired.nextState.timers).toEqual([]);
+  });
+
+  it("ignores a timer delivery after the timer was cancelled", () => {
+    const m = machine();
+    const later = resume({ type: "LATER" });
+    const killed = resumeStep(m, {
+      stored: later.nextState,
+      event: { type: "KILL" },
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    const stale = resumeStep(m, {
+      stored: killed.nextState,
+      event: timerEvent({ id: "d" }),
+      isChild: false,
+      knownChildIds: [],
+      knownPromiseIds: [],
+    });
+    expect(stale.nextState.value).toBe("a");
+    expect(stale.effects).toEqual([]);
   });
 
   it("schedules an explicitly zero-delay raise instead of dropping it", () => {
@@ -299,9 +365,9 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(result.effects, "scheduleSend")).toEqual([
       {
         kind: "scheduleSend",
-        sendId: "zero",
+        sendId: timerId({ id: "zero" }),
         target: { type: "self" },
-        event: { type: "TICK" },
+        event: timerEvent({ id: "zero" }),
         delay: 0,
       },
     ]);
@@ -324,9 +390,9 @@ describe("resumeStep() — events and routing", () => {
     ).toEqual([
       {
         kind: "scheduleSend",
-        sendId: "self-delay",
+        sendId: timerId({ id: "self-delay" }),
         target: { type: "self" },
-        event: { type: "PING" },
+        event: timerEvent({ id: "self-delay" }),
         delay: 10,
       },
     ]);
@@ -334,8 +400,82 @@ describe("resumeStep() — events and routing", () => {
 
   it("emits cancel for cancel(id)", () => {
     expect(byKind(resume({ type: "KILL" }).effects, "cancel")).toEqual([
-      { kind: "cancel", sendId: "d" },
+      { kind: "cancel", sendId: timerId({ id: "d" }) },
     ]);
+  });
+
+  it("numbers unnamed delayed sends with a sequence that survives persistence", () => {
+    const unnamed = createMachine({
+      id: "unnamed",
+      on: {
+        LATER: (_, enq) => {
+          enq.raise({ type: "TICK" }, { delay: 10 });
+        },
+      },
+    });
+    const step = (stored: StoredState) =>
+      resumeStep(unnamed, {
+        stored: JSON.parse(JSON.stringify(stored)) as StoredState,
+        event: { type: "LATER" },
+        isChild: false,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+    const first = step(initialStep(unnamed, { isChild: false }).nextState);
+    const second = step(first.nextState);
+    expect(
+      [...first.effects, ...second.effects].map((effect) =>
+        effect.kind === "scheduleSend" ? effect.sendId : undefined,
+      ),
+    ).toEqual([timerId({ seq: 0 }), timerId({ seq: 1 })]);
+    expect(second.nextState.timers).toHaveLength(2);
+  });
+
+  it("schedules an `after` timer by its event and cancels it on exit", () => {
+    const delayed = createMachine({
+      id: "after",
+      initial: "waiting",
+      states: {
+        waiting: {
+          after: { 1000: { target: "timedOut" } },
+          on: { LEAVE: { target: "left" } },
+        },
+        timedOut: {},
+        left: { on: { BACK: { target: "waiting" } } },
+      },
+    });
+    const key = {
+      event: { type: "xstate.after", delay: 1000, stateId: "after.waiting" },
+    };
+    const created = initialStep(delayed, { isChild: false });
+    expect(created.effects).toEqual([
+      {
+        kind: "scheduleSend",
+        sendId: timerId(key),
+        target: { type: "self" },
+        event: timerEvent(key),
+        delay: 1000,
+      },
+    ]);
+
+    const step = (stored: StoredState, event: { type: string }) =>
+      resumeStep(delayed, {
+        stored,
+        event,
+        isChild: false,
+        knownChildIds: [],
+        knownPromiseIds: [],
+      });
+    const left = step(created.nextState, { type: "LEAVE" });
+    expect(left.effects).toEqual([{ kind: "cancel", sendId: timerId(key) }]);
+
+    // Re-entering reschedules the same key; only the new timer fires.
+    const back = step(left.nextState, { type: "BACK" });
+    expect(byKind(back.effects, "scheduleSend")).toHaveLength(1);
+    expect(step(back.nextState, timerEvent(key)).nextState.value).toBe(
+      "timedOut",
+    );
+    expect(step(left.nextState, timerEvent(key)).nextState.value).toBe("left");
   });
 
   it("routes forwardTo(child) to a send effect targeting the child", () => {
@@ -370,7 +510,7 @@ describe("resumeStep() — events and routing", () => {
     ]);
   });
 
-  it("routes a delayed sendTo(child) to scheduleSend targeting the child", () => {
+  it("schedules a delayed sendTo(child) as a timer that sends to the child when fired", () => {
     const child = createMachine({
       id: "child",
       initial: "a",
@@ -396,10 +536,34 @@ describe("resumeStep() — events and routing", () => {
     expect(byKind(result.effects, "scheduleSend")).toEqual([
       {
         kind: "scheduleSend",
-        sendId: "s",
+        sendId: timerId({ id: "s" }),
+        target: { type: "self" },
+        event: timerEvent({ id: "s" }),
+        delay: 50,
+      },
+    ]);
+    expect(result.nextState.timers).toEqual([
+      {
+        id: "s",
+        delay: 50,
+        type: "@xstate.sendTo",
+        event: { type: "GO" },
+        target: { type: "child", childId: "kid" },
+      },
+    ]);
+
+    const fired = resumeStep(parent, {
+      stored: JSON.parse(JSON.stringify(result.nextState)) as StoredState,
+      event: timerEvent({ id: "s" }),
+      isChild: false,
+      knownChildIds: ["kid"],
+      knownPromiseIds: [],
+    });
+    expect(fired.effects).toEqual([
+      {
+        kind: "send",
         target: { type: "child", childId: "kid" },
         event: { type: "GO" },
-        delay: 50,
       },
     ]);
   });
@@ -618,7 +782,7 @@ describe("resumeStep() — events and routing", () => {
 
   it("stops a child from a serialized context ref", () => {
     // Restate journals the step as JSON, turning the live actor into XState's
-    // current `{ "xstate$type": "actorRef", id, ... }` marker. It must be
+    // `{ "$actor": "<address>" }` marker. It must be
     // canonicalized to the injected child stub before XState applies its
     // ownership check.
     const child = createMachine({
@@ -656,8 +820,7 @@ describe("resumeStep() — events and routing", () => {
       { kind: "stopChild", childId: "kid" },
     ]);
     expect(JSON.parse(JSON.stringify(stopped.nextState)).context.ref).toEqual({
-      xstate$type: "actorRef",
-      id: "kid",
+      $actor: "kid",
     });
   });
 });

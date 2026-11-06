@@ -15,7 +15,7 @@ import {
   createAsyncLogic,
   createMachine,
   initialTransition,
-  isBuiltInExecutableAction,
+  isBuiltInExecutableEffect,
   setup,
   transition,
 } from "xstate";
@@ -34,7 +34,7 @@ const jsonRoundTrip = <T>(value: T): T =>
 
 const builtIn = (actions: unknown[], type: string): any =>
   actions.find(
-    (a) => isBuiltInExecutableAction(a as any) && (a as any).type === type,
+    (a) => isBuiltInExecutableEffect(a as any) && (a as any).type === type,
   );
 
 describe("adversarial probes (v6 pure-transition shapes)", () => {
@@ -176,8 +176,9 @@ describe("adversarial probes (v6 pure-transition shapes)", () => {
       type: "SEND",
     } as never);
     const send = builtIn(actions, "@xstate.sendTo");
-    // The serialized ref stays routable: its id resolves the child target.
-    expect(send.target?.id).toBe("child");
+    // XState passes the serialized ref through as an address marker; its last
+    // address segment names the child, which the interpreter routes by.
+    expect(send.target).toEqual({ $actor: "ref-parent/child" });
   });
 
   it("keeps sendTo(parent) and forwardTo resolvable with fabricated refs", () => {

@@ -13,10 +13,10 @@ import type {
   AnyEventObject,
   AnyMachineSnapshot,
   AnyStateMachine,
-  SpawnExecutableActionObject,
+  SpawnExecutableEffect,
 } from "xstate";
-import { isBuiltInExecutableAction } from "xstate";
-import { resolveReferencedActor } from "./actors";
+import { isBuiltInExecutableEffect } from "xstate";
+import { referenceInlineActor, resolveReferencedActor } from "./actors";
 import { isMachine } from "./registry";
 import { PARENT_ID, runInitial, runTransition, stubChildRef } from "./scope";
 import { fromStored, toReturnedSnapshot, toStored } from "./snapshot";
@@ -36,13 +36,22 @@ import type {
 // fully unit-testable with plain objects. The Restate layer executes the
 // effects (see ../restate/effects.ts).
 //
-// XState v6 returns a `[snapshot, actions]` tuple from its pure transition API,
-// where each action is an `ExecutableActionObject`. We inspect the built-in
-// members (`@xstate.spawn`, `@xstate.sendTo`, `@xstate.raise`, `@xstate.cancel`,
-// `@xstate.stop`) via `isBuiltInExecutableAction` and read their stable named
-// fields. The `@xstate.start` action (a deferred "start this ref") is ignored:
+// XState v6 returns a `[snapshot, effects]` tuple from its pure transition API,
+// where each effect is an `ExecutableEffect`. We inspect the built-in members
+// (`@xstate.spawn`, `@xstate.sendTo`, `@xstate.raise`, `@xstate.cancel`,
+// `@xstate.stop`) via `isBuiltInExecutableEffect` and read their stable named
+// fields. The `@xstate.start` effect (a deferred "start this ref") is ignored:
 // we run actors out-of-band through Restate rather than through XState's actor
 // lifecycle.
+//
+// Delays: XState tracks every pending timer (delayed raise/sendTo, `after`,
+// state/actor timeouts) in the snapshot and fires one when it receives an
+// `xstate.timer` event carrying the timer's key. A delayed effect therefore
+// becomes a durable delivery of that `xstate.timer` event back to this
+// instance; on delivery XState pops the timer and raises its event or emits an
+// immediate `@xstate.sendTo`, which is routed like any other send. Cancelled or
+// replaced timers are gone from the snapshot, so a superseded delivery is a
+// no-op.
 // ---------------------------------------------------------------------------
 
 // ===========================================================================
@@ -137,6 +146,7 @@ function finish(
 interface MutableSnapshot {
   context: unknown;
   children: Record<string, unknown>;
+  timers: readonly { target: unknown }[];
 }
 
 // resolveState drops live children; re-inject stub refs for known children so
@@ -148,7 +158,7 @@ function injectStubChildren(
   knownChildIds: readonly string[],
 ): void {
   const mutable = snapshot as unknown as MutableSnapshot;
-  // XState alpha.48 freezes the empty `children` record produced by
+  // XState freezes the empty `children` record produced by
   // `resolveState`. Replace it with a mutable copy before restoring stubs.
   const children = { ...mutable.children };
   const refs = new Map<string, unknown>();
@@ -158,16 +168,42 @@ function injectStubChildren(
   }
   mutable.children = children;
   mutable.context = canonicalizeActorRefs(mutable.context, refs);
+  // Timers restored with a child target point at the same canonical stubs.
+  mutable.timers = mutable.timers.map((timer) => {
+    const target = timer.target as { id?: unknown } | "self";
+    const childId = target === "self" ? undefined : target.id;
+    return typeof childId === "string" && refs.has(childId)
+      ? { ...timer, target: refs.get(childId) }
+      : timer;
+  });
 }
 
-/** Find an XState actor id on either a serialized marker or a live ref. */
+/**
+ * The actor id in the last segment of an XState actor address
+ * (`parent/child`), decoding XState's `%2F`/`%25` segment escapes.
+ */
+function addressId(address: string): string {
+  const segment = address.slice(address.lastIndexOf("/") + 1);
+  return segment.replaceAll("%2F", "/").replaceAll("%25", "%");
+}
+
+/**
+ * Find an XState actor id on either a serialized marker or a live ref. XState
+ * serializes an actor ref as `{ $actor: address, incarnation? }`.
+ */
 function actorRefId(value: object): string | undefined {
   const candidate = value as Record<string, unknown>;
-  if (typeof candidate.id !== "string") return undefined;
-  if (candidate["xstate$type"] === "actorRef") {
-    return candidate.id;
+  if (typeof candidate.$actor === "string") {
+    const extraKeys = Object.keys(candidate).filter(
+      (key) => key !== "$actor" && key !== "incarnation",
+    );
+    return extraKeys.length === 0 ? addressId(candidate.$actor) : undefined;
   }
-  if (candidate.ref === value && typeof candidate.send === "function") {
+  if (
+    typeof candidate.id === "string" &&
+    candidate.ref === value &&
+    typeof candidate.send === "function"
+  ) {
     return candidate.id;
   }
   return undefined;
@@ -220,10 +256,10 @@ function interpretActions(
   // Actors (re)started and explicitly stopped this step. XState v6 emits
   // `@xstate.spawn` for every invoke/spawn (id, resolved input, `src`/`logic`),
   // and `@xstate.stop` when a transition stops an actor via `enq.stop(ref)`.
-  const spawned = new Map<string, SpawnExecutableActionObject>();
+  const spawned = new Map<string, SpawnExecutableEffect>();
   const stoppedIds = new Set<string>();
   for (const action of actions) {
-    if (!isBuiltInExecutableAction(action)) continue;
+    if (!isBuiltInExecutableEffect(action)) continue;
     if (action.type === "@xstate.spawn") {
       spawned.set(action.id, action);
     } else if (action.type === "@xstate.stop") {
@@ -272,9 +308,15 @@ function interpretActions(
       });
       activeChildren.add(id);
     } else {
+      // The runner resolves `src` by name in another Restate call, so inline
+      // invoke logic travels as a reference to its invoke definition.
+      const src =
+        typeof action.src === "string"
+          ? action.src
+          : (referenceInlineActor(machine, action.src) ?? action.src);
       effects.push({
         kind: "runPromise",
-        params: { id, src: action.src ?? action.logic, input: action.input },
+        params: { id, src, input: action.input },
       });
       activePromises.add(id);
     }
@@ -310,50 +352,112 @@ function resolveChildMachine(
   return isMachine(candidate) ? candidate : undefined;
 }
 
-/** Translate one send/raise/cancel action into an Effect (or none). */
+/** XState's `xstate.timer` event type, which fires a pending timer by key. */
+const XSTATE_TIMER = "xstate.timer";
+
+/** The key XState matches a timer by: `{ id }`, `{ seq }` or `{ event }`. */
+type TimerKey =
+  { id: string } | { seq: number } | { event: Record<string, unknown> };
+
+/** The identifying fields of a built-in timer event (mirrors XState). */
+function builtInTimerIdentity(
+  event: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  switch (event?.type) {
+    case "xstate.after":
+      return { type: event.type, delay: event.delay, stateId: event.stateId };
+    case "xstate.timeout.state":
+      return { type: event.type, stateId: event.stateId };
+    case "xstate.timeout.actor":
+      return { type: event.type, actorId: event.actorId };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The key of the timer a delayed effect schedules or a cancel targets, as
+ * XState resolves it: an explicit `id`, else the sequence number XState
+ * assigns to an unnamed delayed send, else the identity of a built-in timer
+ * event (`after`, timeouts).
+ */
+function timerKeyOf(fields: {
+  id?: string | undefined;
+  seq?: number | undefined;
+  event?: unknown;
+}): TimerKey | undefined {
+  if (fields.id !== undefined) return { id: fields.id };
+  if (fields.seq !== undefined) return { seq: fields.seq };
+  const event = fields.event as Record<string, unknown> | undefined;
+  if (event === undefined) return undefined;
+  return { event: builtInTimerIdentity(event) ?? event };
+}
+
+/** A stable string form of a timer key, used as the durable send id. */
+function timerSendId(key: TimerKey): string {
+  if ("id" in key) return JSON.stringify(["id", key.id]);
+  if ("seq" in key) return JSON.stringify(["seq", key.seq]);
+  return JSON.stringify(["event", key.event]);
+}
+
+/** Schedule the `xstate.timer` delivery that fires a pending XState timer. */
+function scheduleTimer(
+  action: Parameters<typeof timerKeyOf>[0],
+  delay: number,
+): Effect {
+  const key = timerKeyOf(action);
+  if (key === undefined) {
+    throw new Error("XState emitted a delayed effect without a timer key.");
+  }
+  return {
+    kind: "scheduleSend",
+    sendId: timerSendId(key),
+    target: { type: "self" },
+    event: { type: XSTATE_TIMER, ...key },
+    delay,
+  };
+}
+
+/** Translate one send/raise/cancel effect into an Effect (or none). */
 function toEffect(
   machine: AnyStateMachine,
   action: Action,
   activeChildren: ReadonlySet<string>,
 ): Effect | undefined {
-  if (!isBuiltInExecutableAction(action)) return undefined;
+  if (!isBuiltInExecutableEffect(action)) return undefined;
   switch (action.type) {
     case "@xstate.raise": {
       // A raise without a delay is drained inside the macrostep. An explicit
-      // delay (including zero) is scheduled by XState and must not be dropped.
-      // A raise always targets self.
+      // delay (including zero) is a pending XState timer and must not be
+      // dropped.
       return action.delay !== undefined
-        ? scheduleSend(action.id, { type: "self" }, action.event, action.delay)
+        ? scheduleTimer(action, action.delay)
         : undefined;
     }
     case "@xstate.sendTo": {
+      // A delayed send is a timer on this instance; its target is resolved
+      // when it fires, as the immediate send XState emits then.
+      if (action.delay !== undefined) {
+        return scheduleTimer(action, action.delay);
+      }
       const target = targetOf(machine, action.target, activeChildren);
       if (!target) return undefined;
-      return action.delay !== undefined
-        ? scheduleSend(action.id, target, action.event, action.delay)
-        : { kind: "send", target, event: action.event as AnyEventObject };
+      return { kind: "send", target, event: action.event as AnyEventObject };
     }
-    case "@xstate.cancel":
-      return { kind: "cancel", sendId: action.id };
+    case "@xstate.cancel": {
+      // XState already removed the timer from the snapshot. Cancelling the
+      // durable delivery is cleanup: a stale delivery would be a no-op.
+      const key = timerKeyOf(action);
+      return key === undefined
+        ? undefined
+        : { kind: "cancel", sendId: timerSendId(key) };
+    }
     default:
       // @xstate.spawn / @xstate.start / @xstate.stop are handled elsewhere.
+      // @xstate.terminate and @xstate.deadLetter are runtime bookkeeping for
+      // live actors and have no durable counterpart.
       return undefined;
   }
-}
-
-function scheduleSend(
-  sendId: string | undefined,
-  target: Target,
-  event: AnyEventObject,
-  delay: number,
-): Effect {
-  return {
-    kind: "scheduleSend",
-    ...(sendId === undefined ? {} : { sendId }),
-    target,
-    event,
-    delay,
-  };
 }
 
 /** Resolve a `@xstate.sendTo` target ref to a routing destination. */
@@ -363,7 +467,8 @@ function targetOf(
   activeChildren: ReadonlySet<string>,
 ): Target | undefined {
   const ref = target as ActorLike | undefined;
-  const id = ref?.id;
+  const id =
+    ref?.id ?? (ref === undefined ? undefined : actorRefId(ref as object));
   if (id === PARENT_ID) return { type: "parent" };
   if (id !== undefined && activeChildren.has(id)) {
     return { type: "child", childId: id };

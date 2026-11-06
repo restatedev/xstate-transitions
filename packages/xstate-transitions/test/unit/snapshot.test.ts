@@ -39,8 +39,10 @@ describe("toStored / fromStored", () => {
       "context",
       "error",
       "historyValue",
+      "nextTimerId",
       "output",
       "status",
+      "timers",
       "value",
     ]);
     expect(stored.value).toBe("idle");

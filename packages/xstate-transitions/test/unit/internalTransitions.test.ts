@@ -237,10 +237,13 @@ describe("internal transitions — entry set", () => {
       threeEntries: 0,
     });
 
-    // Deliver the scheduled after event exactly as deliverScheduled would.
+    // Deliver the scheduled timer event exactly as deliverScheduled would.
+    const [scheduled] = created.effects;
+    expect(scheduled?.kind).toBe("scheduleSend");
     const fired = resumeStep(machine, {
       stored: created.nextState,
-      event: { type: "xstate.after.10.aftp.p" },
+      event: (scheduled as Extract<typeof scheduled, { kind: "scheduleSend" }>)
+        .event,
       isChild: false,
       knownChildIds: [],
       knownPromiseIds: [],

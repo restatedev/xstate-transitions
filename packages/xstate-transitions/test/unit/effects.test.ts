@@ -201,49 +201,6 @@ describe("executeEffects", () => {
     ]);
   });
 
-  it("generates collision-free ids for unnamed delayed sends", async () => {
-    const harness = createHarness();
-    const effects: Effect[] = ["FIRST", "SECOND"].map((type) => ({
-      kind: "scheduleSend",
-      target: { type: "self" },
-      event: { type },
-      delay: 0,
-    }));
-
-    await executeEffects(harness.handler, effects);
-
-    expect(harness.state.get("scheduled")).toEqual({
-      "uuid-1": {
-        uuid: "uuid-1",
-        targetKey: "parent-key",
-        event: { type: "FIRST" },
-      },
-      "uuid-2": {
-        uuid: "uuid-2",
-        targetKey: "parent-key",
-        event: { type: "SECOND" },
-      },
-    });
-    expect(
-      harness.clientCalls.map(({ key, method, args }) => ({
-        key,
-        method,
-        request: args[0],
-      })),
-    ).toEqual([
-      {
-        key: "parent-key",
-        method: "deliverScheduled",
-        request: { sendId: "uuid-1", uuid: "uuid-1" },
-      },
-      {
-        key: "parent-key",
-        method: "deliverScheduled",
-        request: { sendId: "uuid-2", uuid: "uuid-2" },
-      },
-    ]);
-  });
-
   it("cancels an explicitly identified delayed send", async () => {
     const harness = createHarness();
 
